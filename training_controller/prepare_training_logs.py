@@ -123,9 +123,9 @@ class PrepareTrainingLogs:
             )
         )
         os.remove(self.ES_DUMP_SAMPLE_LOGS_PATH)
-        # Determine number of logs to fetch for training
+        # Determine maximum number of logs to fetch for training
         num_logs_to_fetch = int((free * 0.8) / average_size_per_log_message)
-        logging.info(f"Number of log messages to fetch = {num_logs_to_fetch}")
+        logging.info(f"Maximum number of log messages to fetch = {num_logs_to_fetch}")
         return num_logs_to_fetch
 
     def get_log_count(self, es_instance, timestamps_list, num_logs_to_fetch):
@@ -242,7 +242,7 @@ class PrepareTrainingLogs:
         es_instance = Elasticsearch(
             [ES_ENDPOINT],
             port=9200,
-            http_auth=("admin", "admin"),
+            http_auth=(ES_USERNAME, ES_PASSWORD),
             verify_certs=False,
             use_ssl=True,
         )

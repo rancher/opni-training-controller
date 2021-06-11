@@ -40,7 +40,7 @@ nulog_spec = {
     "image_pull_policy": "Always",
     "labels": {"app": "nulog-train"},
     "restart_policy": "Never",
-    "requests": {"memory": "1Gi", "cpu": 1},
+    "requests": {},
     "limits": {"nvidia.com/gpu": 1},
     "env": [],
 }
