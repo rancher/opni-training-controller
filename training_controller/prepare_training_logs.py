@@ -19,7 +19,7 @@ ES_ENDPOINT = os.environ["ES_ENDPOINT"]
 ES_USERNAME = os.environ["ES_USERNAME"]
 ES_PASSWORD = os.environ["ES_PASSWORD"]
 FORMATTED_ES_ENDPOINT = (
-    "https://{}:{}@".format(ES_USERNAME, ES_PASSWORD) + ES_ENDPOINT.split("//")[-1]
+    f"https://{ES_USERNAME}:{ES_PASSWORD}@" + ES_ENDPOINT.split("//")[-1]
 )
 
 
@@ -125,7 +125,7 @@ class PrepareTrainingLogs:
         os.remove(self.ES_DUMP_SAMPLE_LOGS_PATH)
         # Determine number of logs to fetch for training
         num_logs_to_fetch = int((free * 0.8) / average_size_per_log_message)
-        logging.info("Number of log messages to fetch = {}".format(num_logs_to_fetch))
+        logging.info(f"Number of log messages to fetch = {num_logs_to_fetch}")
         return num_logs_to_fetch
 
     def get_log_count(self, es_instance, timestamps_list, num_logs_to_fetch):
@@ -178,7 +178,7 @@ class PrepareTrainingLogs:
             "--size={}",
             "--limit",
             "10000",
-            "--input={}/logs".format(FORMATTED_ES_ENDPOINT),
+            f"--input={FORMATTED_ES_ENDPOINT}/logs",
             "--output={}",
             "--type=data",
         ]
@@ -194,9 +194,7 @@ class PrepareTrainingLogs:
                 timestamps_esdump_num_logs_fetched[idx]
             )
             current_command[10] = current_command[10].format(
-                os.path.join(
-                    self.es_dump_data_path, "training_logs_{}.json".format(idx)
-                )
+                os.path.join(self.es_dump_data_path, f"training_logs_{idx}.json")
             )
             query_queue.append(current_command)
         if len(query_queue) > 0:

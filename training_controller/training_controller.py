@@ -12,7 +12,7 @@ from elasticsearch import AsyncElasticsearch, exceptions
 from elasticsearch.helpers import async_streaming_bulk
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
-from nats_wrapper import NatsWrapper
+from opni_nats import NatsWrapper
 from prepare_training_logs import PrepareTrainingLogs
 
 MINIO_SERVER_URL = os.environ["MINIO_SERVER_URL"]
@@ -22,6 +22,9 @@ NATS_SERVER_URL = os.environ["NATS_SERVER_URL"]
 ES_ENDPOINT = os.environ["ES_ENDPOINT"]
 ES_USERNAME = os.environ["ES_USERNAME"]
 ES_PASSWORD = os.environ["ES_PASSWORD"]
+NULOG_TRAIN_IMAGE_REPO = os.environ["NULOG_TRAIN_IMAGE_REPO"]
+NULOG_TRAIN_IMAGE_NAME = os.environ["NULOG_TRAIN_IMAGE_NAME"]
+NULOG_TRAIN_IMAGE_TAG = os.environ["NULOG_TRAIN_IMAGE_TAG"]
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(message)s")
 config.load_incluster_config()
 configuration = kubernetes.client.Configuration()
@@ -31,7 +34,9 @@ logging.info("Cluster config has been been loaded")
 nulog_spec = {
     "name": "nulog-train",
     "container_name": "nulog-train",
-    "image_name": "amartyarancher/nulog-train:v0.1",
+    "image_name": "{}/{}:{}".format(
+        NULOG_TRAIN_IMAGE_REPO, NULOG_TRAIN_IMAGE_NAME, NULOG_TRAIN_IMAGE_TAG
+    ),
     "image_pull_policy": "Always",
     "labels": {"app": "nulog-train"},
     "restart_policy": "Never",
@@ -68,7 +73,7 @@ async def update_es_job_status(
     """
     this method updates the status of jobs in elasticsearch.
     """
-    script = "ctx._source.status = '{}';".format(job_status)
+    script = f"ctx._source.status = '{job_status}';"
     docs_to_update = [
         {
             "_id": request_id,
@@ -77,12 +82,12 @@ async def update_es_job_status(
             "script": script,
         }
     ]
-    logging.info("ES job {} status update : {}".format(request_id, job_status))
+    logging.info(f"ES job {request_id} status update : {job_status}")
     try:
         async for ok, result in async_streaming_bulk(es, docs_to_update):
             action, result = result.popitem()
             if not ok:
-                logging.error("failed to %s document %s" % ())
+                logging.error("failed to {} document {}".format())
     except Exception as e:
         logging.error(e)
 
