@@ -63,6 +63,8 @@ es = AsyncElasticsearch(
     use_ssl=True,
 )
 
+nw = NatsWrapper()
+
 
 async def update_es_job_status(
     request_id: str,
@@ -329,9 +331,12 @@ async def consume_nats_drain_signal(queue, signals_queue):
 
 
 async def consume_payload_coroutine(jobs_queue):
-    nw = NatsWrapper()
-    await nw.connect()
     await nw.subscribe(nats_subject="train", payload_queue=jobs_queue)
+
+
+async def init_nats():
+    logging.info("Attempting to connect to NATS")
+    await nw.connect()
 
 
 if __name__ == "__main__":
@@ -345,6 +350,10 @@ if __name__ == "__main__":
     clear_jobs_coroutine = clear_jobs(signals_queue)
     manage_kubernetes_jobs_coroutine = manage_kubernetes_training_jobs(signals_queue)
     es_signal_coroutine = es_training_signal_coroutine(signals_queue)
+
+    task = loop.create_task(init_nats())
+    loop.run_until_complete(task)
+
     loop.run_until_complete(
         asyncio.gather(
             consumer_coroutine,
