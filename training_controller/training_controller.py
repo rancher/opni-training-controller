@@ -3,7 +3,6 @@ import asyncio
 import json
 import logging
 import os
-import time
 from datetime import datetime
 
 # Third Party
@@ -22,7 +21,6 @@ NATS_SERVER_URL = os.environ["NATS_SERVER_URL"]
 ES_ENDPOINT = os.environ["ES_ENDPOINT"]
 ES_USERNAME = os.environ["ES_USERNAME"]
 ES_PASSWORD = os.environ["ES_PASSWORD"]
-NULOG_TRAIN_IMAGE_REPO = os.environ["NULOG_TRAIN_IMAGE_REPO"]
 NULOG_TRAIN_IMAGE_NAME = os.environ["NULOG_TRAIN_IMAGE_NAME"]
 NULOG_TRAIN_IMAGE_TAG = os.environ["NULOG_TRAIN_IMAGE_TAG"]
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(message)s")
@@ -34,23 +32,19 @@ logging.info("Cluster config has been been loaded")
 nulog_spec = {
     "name": "nulog-train",
     "container_name": "nulog-train",
-    "image_name": "{}/{}:{}".format(
-        NULOG_TRAIN_IMAGE_REPO, NULOG_TRAIN_IMAGE_NAME, NULOG_TRAIN_IMAGE_TAG
-    ),
+    "image_name": f"{NULOG_TRAIN_IMAGE_NAME}:{NULOG_TRAIN_IMAGE_TAG}",
     "image_pull_policy": "Always",
     "labels": {"app": "nulog-train"},
     "restart_policy": "Never",
     "requests": {},
     "limits": {"nvidia.com/gpu": 1},
-    "env": [],
+    "env": [
+        client.V1EnvVar(name="MINIO_SERVER_URL", value=MINIO_SERVER_URL),
+        client.V1EnvVar(name="MINIO_ACCESS_KEY", value=MINIO_ACCESS_KEY),
+        client.V1EnvVar(name="MINIO_SECRET_KEY", value=MINIO_SECRET_KEY),
+        client.V1EnvVar(name="NATS_SERVER_URL", value=NATS_SERVER_URL),
+    ],
 }
-nulog_spec["env"] = [
-    client.V1EnvVar(name="MINIO_SERVER_URL", value=MINIO_SERVER_URL),
-    client.V1EnvVar(name="MINIO_ACCESS_KEY", value=MINIO_ACCESS_KEY),
-    client.V1EnvVar(name="MINIO_SECRET_KEY", value=MINIO_SECRET_KEY),
-    client.V1EnvVar(name="NATS_SERVER_URL", value=NATS_SERVER_URL),
-]
-startup_time = time.time()
 
 NAMESPACE = os.environ["JOB_NAMESPACE"]
 DEFAULT_TRAINING_INTERVAL = 1800  # 1800 seconds aka 30mins
@@ -89,7 +83,7 @@ async def update_es_job_status(
         async for ok, result in async_streaming_bulk(es, docs_to_update):
             action, result = result.popitem()
             if not ok:
-                logging.error("failed to {} document {}".format())
+                logging.error(f"failed to index documents {docs_to_update}")
     except Exception as e:
         logging.error(e)
 
