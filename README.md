@@ -2,11 +2,6 @@
 
 ## Run on k8s cluster
 Pre-requisites:
-* Logs must be shipped from client cluster to the target (where you'll deploy preprocessing) cluster
-* Have fastapi-fluentd-sink service running
-* Have elasticsearch cluster installed
-* Have Minio set up on cluster
-* Have Nats installed on cluster
 * Must have at least one GPU node (preferably K80 GPU or higher) and at least two CPUs as part of the cluster with at least 10 GiB memory as well.
 * Make sure appropriate rbac is set up.
 
@@ -41,3 +36,17 @@ kubectl run -i --rm --tty nats-box --image=synadia/nats-box --restart=Never
 nats-pub -s nats://nats_client:VfU6TcAl9x@nats-client.default.svc:4222 train '{"model_to_train": "nulog","time_intervals": [{"start_ts": 1619661600000000000, "end_ts": 1619671569000000000}]}'
 ```
 * You can then view the pods and jobs of your cluster to verify that the Nulog model is undergoing training.
+
+## Contributing
+We use `pre-commit` for formatting auto-linting and checking import. Please refer to [installation](https://pre-commit.com/#installation) to install the pre-commit or run `pip install pre-commit`. Then you can activate it for this repo. Once it's activated, it will lint and format the code when you make a git commit. It makes changes in place. If the code is modified during the reformatting, it needs to be staged manually.
+
+```
+# Install
+pip install pre-commit
+
+# Install the git commit hook to invoke automatically every time you do "git commit"
+pre-commit install
+
+# (Optional)Manually run against all files
+pre-commit run --all-files
+```

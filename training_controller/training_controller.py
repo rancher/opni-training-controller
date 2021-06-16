@@ -3,7 +3,6 @@ import asyncio
 import json
 import logging
 import os
-import time
 from datetime import datetime
 
 # Third Party
@@ -12,7 +11,7 @@ from elasticsearch import AsyncElasticsearch, exceptions
 from elasticsearch.helpers import async_streaming_bulk
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
-from nats_wrapper import NatsWrapper
+from opni_nats import NatsWrapper
 from prepare_training_logs import PrepareTrainingLogs
 
 MINIO_SERVER_URL = os.environ["MINIO_SERVER_URL"]
@@ -22,6 +21,8 @@ NATS_SERVER_URL = os.environ["NATS_SERVER_URL"]
 ES_ENDPOINT = os.environ["ES_ENDPOINT"]
 ES_USERNAME = os.environ["ES_USERNAME"]
 ES_PASSWORD = os.environ["ES_PASSWORD"]
+NULOG_TRAIN_IMAGE_NAME = os.environ["NULOG_TRAIN_IMAGE_NAME"]
+NULOG_TRAIN_IMAGE_TAG = os.environ["NULOG_TRAIN_IMAGE_TAG"]
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(message)s")
 config.load_incluster_config()
 configuration = kubernetes.client.Configuration()
@@ -31,21 +32,19 @@ logging.info("Cluster config has been been loaded")
 nulog_spec = {
     "name": "nulog-train",
     "container_name": "nulog-train",
-    "image_name": "amartyarancher/nulog-train:v0.1",
+    "image_name": f"{NULOG_TRAIN_IMAGE_NAME}:{NULOG_TRAIN_IMAGE_TAG}",
     "image_pull_policy": "Always",
     "labels": {"app": "nulog-train"},
     "restart_policy": "Never",
     "requests": {},
     "limits": {"nvidia.com/gpu": 1},
-    "env": [],
+    "env": [
+        client.V1EnvVar(name="MINIO_SERVER_URL", value=MINIO_SERVER_URL),
+        client.V1EnvVar(name="MINIO_ACCESS_KEY", value=MINIO_ACCESS_KEY),
+        client.V1EnvVar(name="MINIO_SECRET_KEY", value=MINIO_SECRET_KEY),
+        client.V1EnvVar(name="NATS_SERVER_URL", value=NATS_SERVER_URL),
+    ],
 }
-nulog_spec["env"] = [
-    client.V1EnvVar(name="MINIO_SERVER_URL", value=MINIO_SERVER_URL),
-    client.V1EnvVar(name="MINIO_ACCESS_KEY", value=MINIO_ACCESS_KEY),
-    client.V1EnvVar(name="MINIO_SECRET_KEY", value=MINIO_SECRET_KEY),
-    client.V1EnvVar(name="NATS_SERVER_URL", value=NATS_SERVER_URL),
-]
-startup_time = time.time()
 
 NAMESPACE = os.environ["JOB_NAMESPACE"]
 DEFAULT_TRAINING_INTERVAL = 1800  # 1800 seconds aka 30mins
@@ -58,6 +57,8 @@ es = AsyncElasticsearch(
     use_ssl=True,
 )
 
+nw = NatsWrapper()
+
 
 async def update_es_job_status(
     request_id: str,
@@ -68,7 +69,7 @@ async def update_es_job_status(
     """
     this method updates the status of jobs in elasticsearch.
     """
-    script = "ctx._source.status = '{}';".format(job_status)
+    script = f"ctx._source.status = '{job_status}';"
     docs_to_update = [
         {
             "_id": request_id,
@@ -77,12 +78,12 @@ async def update_es_job_status(
             "script": script,
         }
     ]
-    logging.info("ES job {} status update : {}".format(request_id, job_status))
+    logging.info(f"ES job {request_id} status update : {job_status}")
     try:
         async for ok, result in async_streaming_bulk(es, docs_to_update):
             action, result = result.popitem()
             if not ok:
-                logging.error("failed to %s document %s" % ())
+                logging.error(f"failed to index documents {docs_to_update}")
     except Exception as e:
         logging.error(e)
 
@@ -324,9 +325,12 @@ async def consume_nats_drain_signal(queue, signals_queue):
 
 
 async def consume_payload_coroutine(jobs_queue):
-    nw = NatsWrapper()
-    await nw.connect()
     await nw.subscribe(nats_subject="train", payload_queue=jobs_queue)
+
+
+async def init_nats():
+    logging.info("Attempting to connect to NATS")
+    await nw.connect()
 
 
 if __name__ == "__main__":
@@ -340,6 +344,10 @@ if __name__ == "__main__":
     clear_jobs_coroutine = clear_jobs(signals_queue)
     manage_kubernetes_jobs_coroutine = manage_kubernetes_training_jobs(signals_queue)
     es_signal_coroutine = es_training_signal_coroutine(signals_queue)
+
+    task = loop.create_task(init_nats())
+    loop.run_until_complete(task)
+
     loop.run_until_complete(
         asyncio.gather(
             consumer_coroutine,
