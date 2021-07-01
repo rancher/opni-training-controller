@@ -1,35 +1,14 @@
 # Standard Library
 import asyncio
-import json
 import logging
 import os
 from datetime import datetime
 
 # Third Party
-import kubernetes.client
 from elasticsearch import AsyncElasticsearch, exceptions
 from elasticsearch.helpers import async_streaming_bulk
-from kubernetes import client, config
-from kubernetes.client.rest import ApiException
 from opni_nats import NatsWrapper
 from prepare_training_logs import PrepareTrainingLogs
-from elasticsearch.helpers import async_bulk
-from NulogServer import NulogServer
-from train import train_nulog_model, minio_setup_and_download_data
-import asyncio
-import json
-import logging
-import os
-from datetime import datetime
-
-import kubernetes.client
-from elasticsearch import AsyncElasticsearch, exceptions
-from elasticsearch.helpers import async_streaming_bulk
-from kubernetes import client, config
-from kubernetes.client.rest import ApiException
-from opni_nats import NatsWrapper
-from prepare_training_logs import PrepareTrainingLogs
-
 
 ES_ENDPOINT = os.environ["ES_ENDPOINT"]
 ES_USERNAME = os.getenv("ES_USERNAME", "admin")
@@ -45,8 +24,6 @@ DEFAULT_TRAINING_INTERVAL = 1800
 
 nw = NatsWrapper()
 
-gpu_training_request = 0
-
 es = AsyncElasticsearch(
     [ES_ENDPOINT],
     port=9200,
@@ -54,6 +31,7 @@ es = AsyncElasticsearch(
     verify_certs=False,
     use_ssl=True,
 )
+
 
 async def update_es_job_status(
     request_id: str,
@@ -129,23 +107,28 @@ async def es_training_signal():
 
         await asyncio.sleep(60)
 
+
 async def schedule_training_job(payload):
-        model_to_train = payload["model"]
-        model_payload = payload["payload"]
-        PrepareTrainingLogs("/tmp").run(model_payload["time_intervals"])
-        if model_to_train == "nulog-train":
-            # if "source" in payload and payload["source"] == "elasticsearch":
-            #     await update_es_job_status(
-            #         request_id=payload["_id"], job_status="trainingStarted"
-            #     )
-            await nw.publish("gpu_available", b"JobAdded") # controller will start to decline inference requests
-            await nw.publish("gpu_service_training_internal", pd.to_json(payload)) # send jobs to nulog-train container
+    model_to_train = payload["model"]
+    model_payload = payload["payload"]
+    PrepareTrainingLogs("/tmp").run(model_payload["time_intervals"])
+    if model_to_train == "nulog-train":
+        # if "source" in payload and payload["source"] == "elasticsearch":
+        #     await update_es_job_status(
+        #         request_id=payload["_id"], job_status="trainingStarted"
+        #     )
+        await nw.publish(
+            "gpu_available", b"JobAdded"
+        )  # controller will start to decline inference requests
+        await nw.publish(
+            "gpu_service_training_internal", pd.to_json(payload)
+        )  # send jobs to nulog-train container
+
 
 async def main(request_queue):
-
     async def consume_nats_signal(msg):
         try:
-            decoded_payload = pd.read_json(msg.data().encode()) ## to fix
+            decoded_payload = pd.read_json(msg.data().encode())  ## to fix
             # process the payload
             if decoded_payload["model_to_train"] == "nulog":
                 training_job_payload = {
@@ -158,16 +141,20 @@ async def main(request_queue):
 
         except Exception as e:
             logging.error(e)
+
     await nw.nc.subscribe(nats_subject="train", cb=consume_nats_signal)
 
-        #     ##TODO: move to nulog-train
-        #     await minio_setup_and_download_data(minio_client) # download from minio
-        #     await model_trained = train_nulog_model(minio_client, "windows/") # training job
-        #     if model_trained: ## assume the model training always works
-        #         gpu_training_request -= 1
-        #         # notify inference services.
+    #     ##TODO: move to nulog-train
+    #     await minio_setup_and_download_data(minio_client) # download from minio
+    #     await model_trained = train_nulog_model(minio_client, "windows/") # training job
+    #     if model_trained: ## assume the model training always works
+    #         gpu_training_request -= 1
+    #         # notify inference services.
+
 
 async def consume_request():
+    gpu_training_request = 0
+
     async def gpu_available(msg):
         message = msg.data().decode()
         if message == "JobAdded":
@@ -177,9 +164,11 @@ async def consume_request():
 
     async def receive_and_reply(msg):
         reply_subject = msg.reply
-        
+
         if gpu_training_request == 0:
-            nw.publish(nats_subject="gpu_service_inference_internal", payload=msg) ## to fix
+            nw.publish(
+                nats_subject="gpu_service_inference_internal", payload=msg
+            )  ## to fix
             reply_message = b"request accepted."
         else:
             reply_message = b"request declined."
@@ -202,11 +191,7 @@ if __name__ == "__main__":
     consume_request_coroutine = consume_request()
     main_coroutine = main()
 
-    loop.run_until_complete(
-        asyncio.gather(
-            main_coroutine, consume_request_coroutine
-        )
-    )
+    loop.run_until_complete(asyncio.gather(main_coroutine, consume_request_coroutine))
     try:
         loop.run_forever()
     finally:
