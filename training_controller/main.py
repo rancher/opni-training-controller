@@ -165,13 +165,13 @@ async def consume_request():
     async def receive_and_reply(msg):
         reply_subject = msg.reply
 
-        if gpu_training_request == 0:
+        if gpu_training_request > 0:
+            reply_message = b"request declined."
+        else:
             nw.publish(
                 nats_subject="gpu_service_inference_internal", payload=msg
             )  ## to fix
             reply_message = b"request accepted."
-        else:
-            reply_message = b"request declined."
         await nw.nc.publish(reply_subject, reply_message)
 
     await nw.nc.subscribe(nats_subject="gpu_available", cb=gpu_available)
