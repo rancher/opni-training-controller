@@ -118,17 +118,17 @@ async def schedule_training_job(payload):
         #         request_id=payload["_id"], job_status="trainingStarted"
         #     )
         await nw.publish(
-            "gpu_available", b"JobAdded"
+            "gpu_trainingjob_status", b"JobStart"
         )  # controller will start to decline inference requests
         await nw.publish(
-            "gpu_service_training_internal", pd.to_json(payload)
+            "gpu_service_training_internal", (json.dumps(payload)).encode()
         )  # send jobs to nulog-train container
 
 
 async def main(request_queue):
     async def consume_nats_signal(msg):
         try:
-            decoded_payload = pd.read_json(msg.data().encode())  ## to fix
+            decoded_payload = json.loads(msg.data.decode())
             # process the payload
             if decoded_payload["model_to_train"] == "nulog":
                 training_job_payload = {
@@ -144,37 +144,35 @@ async def main(request_queue):
 
     await nw.nc.subscribe(nats_subject="train", cb=consume_nats_signal)
 
-    #     ##TODO: move to nulog-train
-    #     await minio_setup_and_download_data(minio_client) # download from minio
-    #     await model_trained = train_nulog_model(minio_client, "windows/") # training job
-    #     if model_trained: ## assume the model training always works
-    #         gpu_training_request -= 1
-    #         # notify inference services.
-
 
 async def consume_request():
     gpu_training_request = 0
 
     async def gpu_available(msg):
-        message = msg.data().decode()
-        if message == "JobAdded":
+        message = msg.data.decode()
+        if (
+            message == "JobStart"
+        ):  ## "JobStart" is published from frunction schedule_training_job(), when a training job is launched
             gpu_training_request += 1
-        elif message == "JobComplete":
+        elif (
+            message == "JobEnd"
+        ):  ## "JobEnd" is published from nulog-train contrainer, when a training job is completed
             gpu_training_request -= 1
 
     async def receive_and_reply(msg):
         reply_subject = msg.reply
 
         if gpu_training_request > 0:
-            reply_message = b"request declined."
-        else:
+            reply_message = b"NO"
+        else:  ## gpu service is available for inferencing only when there's no training job in the queue.
             nw.publish(
-                nats_subject="gpu_service_inference_internal", payload=msg
-            )  ## to fix
-            reply_message = b"request accepted."
+                nats_subject="gpu_service_inference_internal", payload=msg.data
+            )  # publish data to nulog-gpu-service
+            reply_message = b"YES"
+        logging.info(f"received inferencing request. response : {reply_message}")
         await nw.nc.publish(reply_subject, reply_message)
 
-    await nw.nc.subscribe(nats_subject="gpu_available", cb=gpu_available)
+    await nw.nc.subscribe(nats_subject="gpu_trainingjob_status", cb=gpu_available)
     await nw.nc.subscribe(nats_subject="gpu_service_inference", cb=receive_and_reply)
 
 

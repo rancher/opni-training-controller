@@ -4,4 +4,4 @@ COPY ./training_controller/ /app/
 RUN chmod a+rwx -R /app
 RUN pip install --no-cache-dir -r requirements.txt
 RUN npm install elasticdump -g
-CMD ["python", "training_controller.py"]
+CMD ["python", "main.py"]
