@@ -1,5 +1,6 @@
 # Standard Library
 import asyncio
+import json
 import logging
 import os
 from datetime import datetime
@@ -125,7 +126,7 @@ async def schedule_training_job(payload):
         )  # send jobs to nulog-train container
 
 
-async def main(request_queue):
+async def main():
     async def consume_nats_signal(msg):
         try:
             decoded_payload = json.loads(msg.data.decode())
@@ -142,14 +143,17 @@ async def main(request_queue):
         except Exception as e:
             logging.error(e)
 
-    await nw.nc.subscribe(nats_subject="train", cb=consume_nats_signal)
+    await nw.nc.subscribe("train", cb=consume_nats_signal)
+
+
+gpu_training_request = 0
 
 
 async def consume_request():
-    gpu_training_request = 0
-
     async def gpu_available(msg):
+        global gpu_training_request
         message = msg.data.decode()
+        logging.info(f"message from training : {message}")
         if (
             message == "JobStart"
         ):  ## "JobStart" is published from frunction schedule_training_job(), when a training job is launched
@@ -165,15 +169,15 @@ async def consume_request():
         if gpu_training_request > 0:
             reply_message = b"NO"
         else:  ## gpu service is available for inferencing only when there's no training job in the queue.
-            nw.publish(
-                nats_subject="gpu_service_inference_internal", payload=msg.data
+            await nw.publish(
+                nats_subject="gpu_service_inference_internal", payload_df=msg.data
             )  # publish data to nulog-gpu-service
             reply_message = b"YES"
         logging.info(f"received inferencing request. response : {reply_message}")
         await nw.nc.publish(reply_subject, reply_message)
 
-    await nw.nc.subscribe(nats_subject="gpu_trainingjob_status", cb=gpu_available)
-    await nw.nc.subscribe(nats_subject="gpu_service_inference", cb=receive_and_reply)
+    await nw.nc.subscribe("gpu_trainingjob_status", cb=gpu_available)
+    await nw.nc.subscribe("gpu_service_inference", cb=receive_and_reply)
 
 
 async def init_nats():
@@ -189,7 +193,10 @@ if __name__ == "__main__":
     consume_request_coroutine = consume_request()
     main_coroutine = main()
 
-    loop.run_until_complete(asyncio.gather(main_coroutine, consume_request_coroutine))
+    logging.info("start gpu-service-controller...")
+    loop.run_until_complete(
+        asyncio.gather(main_coroutine, consume_request_coroutine, es_training_signal())
+    )
     try:
         loop.run_forever()
     finally:
