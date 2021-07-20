@@ -18,13 +18,10 @@ MINIO_SERVER_URL = os.environ["MINIO_SERVER_URL"]
 MINIO_ACCESS_KEY = os.environ["MINIO_ACCESS_KEY"]
 MINIO_SECRET_KEY = os.environ["MINIO_SECRET_KEY"]
 NATS_SERVER_URL = os.environ["NATS_SERVER_URL"]
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(message)s")
-
 DEFAULT_TRAINING_INTERVAL = 1800
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(message)s")
 nw = NatsWrapper()
-
 es = AsyncElasticsearch(
     [ES_ENDPOINT],
     port=9200,
@@ -105,32 +102,27 @@ async def es_training_signal():
                     await schedule_training_job(training_job_payload)
         except (exceptions.NotFoundError, exceptions.TransportError) as e:
             logging.error(e)
-
         await asyncio.sleep(60)
 
 
 async def schedule_training_job(payload):
+    """
+    prepare the training data and launch nulog-train job
+    """
     model_to_train = payload["model"]
     model_payload = payload["payload"]
     PrepareTrainingLogs("/tmp").run(model_payload["time_intervals"])
     if model_to_train == "nulog-train":
-        # if "source" in payload and payload["source"] == "elasticsearch":
-        #     await update_es_job_status(
-        #         request_id=payload["_id"], job_status="trainingStarted"
-        #     )
-        await nw.publish(
-            "gpu_trainingjob_status", b"JobStart"
-        )  # controller will start to decline inference requests
+        await nw.publish("gpu_trainingjob_status", b"JobStart")  # update gpu status
         await nw.publish(
             "gpu_service_training_internal", (json.dumps(payload)).encode()
-        )  # send jobs to nulog-train container
+        )  # schedule job
 
 
 async def main():
     async def consume_nats_signal(msg):
         try:
             decoded_payload = json.loads(msg.data.decode())
-            # process the payload
             if decoded_payload["model_to_train"] == "nulog":
                 training_job_payload = {
                     "source": "drain",
@@ -139,45 +131,47 @@ async def main():
                 }
                 await schedule_training_job(training_job_payload)
             logging.info("Just received signal to begin running the jobs")
-
         except Exception as e:
             logging.error(e)
 
-    await nw.nc.subscribe("train", cb=consume_nats_signal)
+    await nw.subscribe("train", subscribe_handler=consume_nats_signal)
 
 
 gpu_training_request = 0
 
 
 async def consume_request():
+    """
+    consume incoming requests for inference on gpu-service.
+    check the status of training jobs to prioritize them.
+    inference requests get accepted only if there's no training jobs in queue.
+    """
+
     async def gpu_available(msg):
         global gpu_training_request
         message = msg.data.decode()
         logging.info(f"message from training : {message}")
         if (
             message == "JobStart"
-        ):  ## "JobStart" is published from frunction schedule_training_job(), when a training job is launched
+        ):  ## "JobStart" is published from frunction schedule_training_job()
             gpu_training_request += 1
-        elif (
-            message == "JobEnd"
-        ):  ## "JobEnd" is published from nulog-train contrainer, when a training job is completed
+        elif message == "JobEnd":  ## "JobEnd" is published from nulog-train contrainer
             gpu_training_request -= 1
 
     async def receive_and_reply(msg):
         reply_subject = msg.reply
-
         if gpu_training_request > 0:
             reply_message = b"NO"
-        else:  ## gpu service is available for inferencing only when there's no training job in the queue.
+        else:  ## gpu service available for inference
             await nw.publish(
                 nats_subject="gpu_service_inference_internal", payload_df=msg.data
-            )  # publish data to nulog-gpu-service
+            )
             reply_message = b"YES"
         logging.info(f"received inferencing request. response : {reply_message}")
-        await nw.nc.publish(reply_subject, reply_message)
+        await nw.publish(reply_subject, reply_message)
 
-    await nw.nc.subscribe("gpu_trainingjob_status", cb=gpu_available)
-    await nw.nc.subscribe("gpu_service_inference", cb=receive_and_reply)
+    await nw.subscribe("gpu_trainingjob_status", subscribe_handler=gpu_available)
+    await nw.subscribe("gpu_service_inference", subscribe_handler=receive_and_reply)
 
 
 async def init_nats():
@@ -187,12 +181,10 @@ async def init_nats():
 
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
-
     task = loop.create_task(init_nats())
     loop.run_until_complete(task)
     consume_request_coroutine = consume_request()
     main_coroutine = main()
-
     logging.info("start gpu-service-controller...")
     loop.run_until_complete(
         asyncio.gather(main_coroutine, consume_request_coroutine, es_training_signal())
