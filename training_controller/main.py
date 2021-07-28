@@ -29,6 +29,7 @@ es = AsyncElasticsearch(
     verify_certs=False,
     use_ssl=True,
 )
+gpu_training_request = 0
 
 
 async def update_es_job_status(
@@ -135,9 +136,6 @@ async def main():
             logging.error(e)
 
     await nw.subscribe("train", subscribe_handler=consume_nats_signal)
-
-
-gpu_training_request = 0
 
 
 async def consume_request():
