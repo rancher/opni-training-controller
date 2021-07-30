@@ -10,6 +10,7 @@ import boto3
 import pandas as pd
 from botocore.client import Config
 from elasticsearch import Elasticsearch
+from elasticsearch.helpers import scan
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(message)s")
 MINIO_SERVER_URL = os.environ["MINIO_SERVER_URL"]
@@ -49,7 +50,7 @@ class PrepareTrainingLogs:
         ]
         df[
             [
-                "time_nanoseconds",
+                "timestamp",
                 "window_start_time_ns",
                 "masked_log",
                 "is_control_plane_log",
@@ -102,7 +103,7 @@ class PrepareTrainingLogs:
         # Get the first 10k logs
         logging.info("Retrieve sample logs from ES")
         es_dump_cmd = (
-            'elasticdump --searchBody \'{"query": { "match_all": {} }, "_source": ["masked_log", "time_nanoseconds"], "sort": [{"time_nanoseconds": {"order": "desc"}}]}\' --retryAttempts 10 --size=10000 --limit 10000 --input=%s/logs --output=%s --type=data'
+            'elasticdump --searchBody \'{"query": { "match_all": {} }, "_source": ["masked_log", "timestamp"], "sort": [{"timestamp": {"order": "desc"}}]}\' --retryAttempts 10 --size=10000 --limit 10000 --input=%s/logs --output=%s --type=data'
             % (FORMATTED_ES_ENDPOINT, self.ES_DUMP_SAMPLE_LOGS_PATH)
         )
         subprocess.run(es_dump_cmd, shell=True)
@@ -117,11 +118,7 @@ class PrepareTrainingLogs:
         sample_logs_bytes_size = os.path.getsize(self.ES_DUMP_SAMPLE_LOGS_PATH)
         num_lines = sum(1 for line in open(self.ES_DUMP_SAMPLE_LOGS_PATH))
         average_size_per_log_message = sample_logs_bytes_size / num_lines
-        logging.info(
-            "\naverage size per log message = {} bytes".format(
-                average_size_per_log_message
-            )
-        )
+        logging.info(f"average size per log message = {average_size_per_log_message} bytes")
         os.remove(self.ES_DUMP_SAMPLE_LOGS_PATH)
         # Determine maximum number of logs to fetch for training
         num_logs_to_fetch = int((free * 0.8) / average_size_per_log_message)
@@ -140,7 +137,7 @@ class PrepareTrainingLogs:
                         "filter": [
                             {
                                 "range": {
-                                    "time_nanoseconds": {"gte": start_ts, "lt": end_ts}
+                                    "timestamp": {"gte": start_ts, "lte": end_ts}
                                 }
                             }
                         ],
@@ -171,7 +168,7 @@ class PrepareTrainingLogs:
         esdump_sample_command = [
             "elasticdump",
             "--searchBody",
-            '{{"query": {{"bool": {{"must": [{{"term": {{"is_control_plane_log": false}}}},{{"range": {{"time_nanoseconds": {{"gte": {},"lt": {}}}}}}}]}}}} ,"_source": ["masked_log", "time_nanoseconds", "is_control_plane_log", "window_start_time_ns", "_id"], "sort": [{{"time_nanoseconds": {{"order": "desc"}}}}]}}',
+            '{{"query": {{"bool": {{"must": [{{"term": {{"is_control_plane_log": false}}}},{{"range": {{"timestamp": {{"gte": {},"lt": {}}}}}}}]}}}} ,"_source": ["masked_log", "timestamp", "is_control_plane_log", "window_start_time_ns", "_id"], "sort": [{{"timestamp": {{"order": "desc"}}}}]}}',
             "--retryAttempts",
             "100",
             "--fileSize=50mb",
@@ -232,8 +229,26 @@ class PrepareTrainingLogs:
             "training-logs",
             os.path.basename(self.ES_DUMP_DIR_ZIPPED),
         )
+    def fetch_and_update_timestamps(self,es_instance):
+        oldest_log = es_instance.search(index="logs", body={"query": {"match_all": {}}, "_source": ["timestamp"],
+                           "sort": [{"timestamp": {"order": "asc"}}]}, size=1)
+        oldest_log_timestamp = int(oldest_log["hits"]["hits"][0]["_source"]["timestamp"])
+        timestamps_list = []
+        for normal_interval in scan(es_instance, index="opni-normal-intervals", query={"query": {"match_all": {}}}):
+            start_ts, end_ts = normal_interval["_source"]["start_ts"], normal_interval["_source"]["end_ts"]
+            if end_ts < oldest_log_timestamp:
+                es_instance.delete(index="opni-normal-intervals", doc_type=normal_interval["_type"], id=normal_interval["_id"])
+                logging.info("Deleting old normal time interval from Elasticsearch")
+            elif start_ts < oldest_log_timestamp:
+                timestamps_list.append({"start_ts": oldest_log_timestamp, "end_ts": end_ts})
+                es_instance.update(index="opni-normal-intervals", doc_type=normal_interval["_type"], id=normal_interval["_id"], body={"doc": {"start_ts": oldest_log_timestamp}})
+                logging.info("Updating time interval within Elasticsearch.")
+            else:
+                timestamps_list.append({"start_ts": start_ts, "end_ts": end_ts})
 
-    def run(self, timestamps_list):
+        return timestamps_list
+
+    def run(self):
         self.es_dump_data_path = os.path.join(self.WORKING_DIR, "esdump_data/")
         if not os.path.exists(self.es_dump_data_path):
             os.makedirs(self.es_dump_data_path)
@@ -249,6 +264,7 @@ class PrepareTrainingLogs:
         free = self.disk_size()
         self.retrieve_sample_logs()
         num_logs_to_fetch = self.calculate_training_logs_size(free)
+        timestamps_list = self.fetch_and_update_timestamps(es_instance)
         self.fetch_training_logs(es_instance, num_logs_to_fetch, timestamps_list)
         self.create_windows()
         self.tar_windows_folder()
