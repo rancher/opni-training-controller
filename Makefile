@@ -6,7 +6,7 @@ endif
 
 ORG ?= rancher
 TAG ?= v0
-REPO=opni-training-controller
+REPO=opni-gpu-service-controller
 
 ifneq ($(DRONE_TAG),)
 TAG := $(DRONE_TAG)
