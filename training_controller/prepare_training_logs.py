@@ -236,37 +236,35 @@ class PrepareTrainingLogs:
     def fetch_and_update_timestamps(self,es_instance):
         timestamps_list = []
         try:
-            oldest_log = es_instance.search(index="logs", body={"query": {"match_all": {}}, "_source": ["timestamp"],
-                               "sort": [{"timestamp": {"order": "asc"}}]}, size=1)
+            oldest_log = es_instance.search(index="logs", body={"aggs": {"min_ts": {"min": { "field": "timestamp"}}}, "_source": ["timestamp"]}, size=1)
         except Exception as e:
             logging.error(e)
             return timestamps_list
-        if len(oldest_log["hits"]["hits"]) > 0:
-            oldest_log_timestamp = int(oldest_log["hits"]["hits"][0]["_source"]["timestamp"])
-            try:
-                all_normal_intervals = scan(es_instance, index="opni-normal-intervals", query={"query": {"match_all": {}}})
-            except Exception as e:
-                logging.error("Error trying to retrieve all normal intervals from opni-normal-intervals index")
-                return timestamps_list
-            for normal_interval in all_normal_intervals:
-                start_ts, end_ts = normal_interval["_source"]["start_ts"], normal_interval["_source"]["end_ts"]
-                if end_ts < oldest_log_timestamp:
-                    try:
-                        es_instance.delete(index="opni-normal-intervals", doc_type=normal_interval["_type"], id=normal_interval["_id"])
-                        logging.info("Deleting old normal time interval from Elasticsearch")
-                    except Exception as e:
-                        logging.error("Error deleting document from opni-normal-intervals index.")
-                        continue
-                elif start_ts < oldest_log_timestamp:
-                    timestamps_list.append({"start_ts": oldest_log_timestamp, "end_ts": end_ts})
-                    try:
-                        es_instance.update(index="opni-normal-intervals", doc_type=normal_interval["_type"], id=normal_interval["_id"], body={"doc": {"start_ts": oldest_log_timestamp}})
-                        logging.info("Updating time interval within Elasticsearch.")
-                    except Exception as e:
-                        logging.error("Error updating document within opni-normal-intervals index.")
-                        continue
-                else:
-                    timestamps_list.append({"start_ts": start_ts, "end_ts": end_ts})
+        oldest_log_timestamp = int(oldest_log["aggregations"]["min_ts"]["value"])
+        try:
+            all_normal_intervals = scan(es_instance, index="opni-normal-intervals", query={"query": {"match_all": {}}})
+        except Exception as e:
+            logging.error("Error trying to retrieve all normal intervals from opni-normal-intervals index")
+            return timestamps_list
+        for normal_interval in all_normal_intervals:
+            start_ts, end_ts = normal_interval["_source"]["start_ts"], normal_interval["_source"]["end_ts"]
+            if end_ts < oldest_log_timestamp:
+                try:
+                    es_instance.delete(index="opni-normal-intervals", doc_type=normal_interval["_type"], id=normal_interval["_id"])
+                    logging.info("Deleting old normal time interval from Elasticsearch")
+                except Exception as e:
+                    logging.error("Error deleting document from opni-normal-intervals index.")
+                    continue
+            elif start_ts < oldest_log_timestamp:
+                timestamps_list.append({"start_ts": oldest_log_timestamp, "end_ts": end_ts})
+                try:
+                    es_instance.update(index="opni-normal-intervals", doc_type=normal_interval["_type"], id=normal_interval["_id"], body={"doc": {"start_ts": oldest_log_timestamp}})
+                    logging.info("Updating time interval within Elasticsearch.")
+                except Exception as e:
+                    logging.error("Error updating document within opni-normal-intervals index.")
+                    continue
+            else:
+                timestamps_list.append({"start_ts": start_ts, "end_ts": end_ts})
 
         return timestamps_list
 
