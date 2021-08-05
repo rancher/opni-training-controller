@@ -111,8 +111,7 @@ async def schedule_training_job(payload):
     prepare the training data and launch nulog-train job
     """
     model_to_train = payload["model"]
-    model_payload = payload["payload"]
-    PrepareTrainingLogs("/tmp").run(model_payload["time_intervals"])
+    PrepareTrainingLogs("/tmp").run()
     if model_to_train == "nulog-train":
         await nw.publish("gpu_trainingjob_status", b"JobStart")  # update gpu status
         await nw.publish(
@@ -124,13 +123,12 @@ async def main():
     async def consume_nats_signal(msg):
         try:
             decoded_payload = json.loads(msg.data.decode())
-            if decoded_payload["model_to_train"] == "nulog":
-                training_job_payload = {
-                    "source": "drain",
-                    "model": "nulog-train",
-                    "payload": decoded_payload,
-                }
-                await schedule_training_job(training_job_payload)
+            training_job_payload = {
+                "source": "drain",
+                "model": "nulog-train",
+                "payload": decoded_payload,
+            }
+            await schedule_training_job(training_job_payload)
             logging.info("Just received signal to begin running the jobs")
         except Exception as e:
             logging.error(e)
