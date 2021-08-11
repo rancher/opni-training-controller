@@ -14,10 +14,10 @@ from prepare_training_logs import PrepareTrainingLogs
 ES_ENDPOINT = os.environ["ES_ENDPOINT"]
 ES_USERNAME = os.getenv("ES_USERNAME", "admin")
 ES_PASSWORD = os.getenv("ES_PASSWORD", "admin")
-MINIO_SERVER_URL = os.environ["MINIO_SERVER_URL"]
-MINIO_ACCESS_KEY = os.environ["MINIO_ACCESS_KEY"]
-MINIO_SECRET_KEY = os.environ["MINIO_SECRET_KEY"]
-NATS_SERVER_URL = os.environ["NATS_SERVER_URL"]
+S3_ENDPOINT = os.environ["S3_ENDPOINT"]
+S3_ACCESS_KEY = os.environ["S3_ACCESS_KEY"]
+S3_SECRET_KEY = os.environ["S3_SECRET_KEY"]
+NATS_ENDPOINT = os.environ["NATS_ENDPOINT"]
 DEFAULT_TRAINING_INTERVAL = 1800
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(message)s")

@@ -13,9 +13,10 @@ from elasticsearch import Elasticsearch
 from elasticsearch.helpers import scan
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(message)s")
-MINIO_SERVER_URL = os.environ["MINIO_SERVER_URL"]
-MINIO_ACCESS_KEY = os.environ["MINIO_ACCESS_KEY"]
-MINIO_SECRET_KEY = os.environ["MINIO_SECRET_KEY"]
+S3_ENDPOINT = os.environ["S3_ENDPOINT"]
+S3_ACCESS_KEY = os.environ["S3_ACCESS_KEY"]
+S3_SECRET_KEY = os.environ["S3_SECRET_KEY"]
+S3_BUCKET = os.getenv("S3_BUCKET", "opni-training-logs")
 ES_ENDPOINT = os.environ["ES_ENDPOINT"]
 ES_USERNAME = os.environ["ES_USERNAME"]
 ES_PASSWORD = os.environ["ES_PASSWORD"]
@@ -33,11 +34,11 @@ class PrepareTrainingLogs:
             self.WORKING_DIR, "sample_logs.json"
         )
 
-        self.minio_client = boto3.resource(
+        self.s3_client = boto3.resource(
             "s3",
-            endpoint_url=MINIO_SERVER_URL,
-            aws_access_key_id=MINIO_ACCESS_KEY,
-            aws_secret_access_key=MINIO_SECRET_KEY,
+            endpoint_url=S3_ENDPOINT,
+            aws_access_key_id=S3_ACCESS_KEY,
+            aws_secret_access_key=S3_SECRET_KEY,
             config=Config(signature_version="s3v4"),
         )
         self.es_dump_data_path = ""
@@ -224,13 +225,13 @@ class PrepareTrainingLogs:
             tar.add(self.ES_DUMP_DIR, arcname=os.path.basename(self.ES_DUMP_DIR))
         shutil.rmtree(self.ES_DUMP_DIR)
 
-    def upload_windows_tar_to_minio(self):
-        # upload to minio
-        if not self.minio_client.Bucket("training-logs").creation_date:
-            self.minio_client.meta.client.create_bucket(Bucket="training-logs")
-        self.minio_client.meta.client.upload_file(
+    def upload_windows_tar_to_s3(self):
+        # upload to s3
+        if not self.s3_client.Bucket(S3_BUCKET).creation_date:
+            self.s3_client.meta.client.create_bucket(Bucket=S3_BUCKET)
+        self.s3_client.meta.client.upload_file(
             self.ES_DUMP_DIR_ZIPPED,
-            "training-logs",
+            S3_BUCKET,
             os.path.basename(self.ES_DUMP_DIR_ZIPPED),
         )
     def fetch_and_update_timestamps(self,es_instance):
@@ -288,4 +289,4 @@ class PrepareTrainingLogs:
         self.fetch_training_logs(es_instance, num_logs_to_fetch, timestamps_list)
         self.create_windows()
         self.tar_windows_folder()
-        self.upload_windows_tar_to_minio()
+        self.upload_windows_tar_to_s3()
