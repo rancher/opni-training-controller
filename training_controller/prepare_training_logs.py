@@ -13,33 +13,21 @@ from elasticsearch import Elasticsearch
 from elasticsearch.helpers import scan
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(message)s")
-S3_ENDPOINT = os.environ["S3_ENDPOINT"]
-S3_ACCESS_KEY = os.environ["S3_ACCESS_KEY"]
-S3_SECRET_KEY = os.environ["S3_SECRET_KEY"]
-S3_BUCKET = os.getenv("S3_BUCKET", "opni-training-logs")
 ES_ENDPOINT = os.environ["ES_ENDPOINT"]
 ES_USERNAME = os.environ["ES_USERNAME"]
 ES_PASSWORD = os.environ["ES_PASSWORD"]
 FORMATTED_ES_ENDPOINT = (
     f"https://{ES_USERNAME}:{ES_PASSWORD}@" + ES_ENDPOINT.split("//")[-1]
 )
+TRAINING_DATA_PATH = os.getenv("TRAINING_DATA_PATH", "/var/opni-data")
 
 
 class PrepareTrainingLogs:
-    def __init__(self, working_dir):
-        self.WORKING_DIR = working_dir
+    def __init__(self):
+        self.WORKING_DIR = TRAINING_DATA_PATH
         self.ES_DUMP_DIR = os.path.join(self.WORKING_DIR, "windows")
-        self.ES_DUMP_DIR_ZIPPED = self.ES_DUMP_DIR + ".tar.gz"
         self.ES_DUMP_SAMPLE_LOGS_PATH = os.path.join(
             self.WORKING_DIR, "sample_logs.json"
-        )
-
-        self.s3_client = boto3.resource(
-            "s3",
-            endpoint_url=S3_ENDPOINT,
-            aws_access_key_id=S3_ACCESS_KEY,
-            aws_secret_access_key=S3_SECRET_KEY,
-            config=Config(signature_version="s3v4"),
         )
         self.es_dump_data_path = ""
 
@@ -219,21 +207,6 @@ class PrepareTrainingLogs:
             os.remove(json_file_to_process)
         shutil.rmtree(self.es_dump_data_path)
 
-    def tar_windows_folder(self):
-        # tar windows folder
-        with tarfile.open(self.ES_DUMP_DIR_ZIPPED, "w:gz") as tar:
-            tar.add(self.ES_DUMP_DIR, arcname=os.path.basename(self.ES_DUMP_DIR))
-        shutil.rmtree(self.ES_DUMP_DIR)
-
-    def upload_windows_tar_to_s3(self):
-        # upload to s3
-        if not self.s3_client.Bucket(S3_BUCKET).creation_date:
-            self.s3_client.meta.client.create_bucket(Bucket=S3_BUCKET)
-        self.s3_client.meta.client.upload_file(
-            self.ES_DUMP_DIR_ZIPPED,
-            S3_BUCKET,
-            os.path.basename(self.ES_DUMP_DIR_ZIPPED),
-        )
     def fetch_and_update_timestamps(self,es_instance):
         timestamps_list = []
         try:
@@ -288,5 +261,3 @@ class PrepareTrainingLogs:
         timestamps_list = self.fetch_and_update_timestamps(es_instance)
         self.fetch_training_logs(es_instance, num_logs_to_fetch, timestamps_list)
         self.create_windows()
-        self.tar_windows_folder()
-        self.upload_windows_tar_to_s3()
