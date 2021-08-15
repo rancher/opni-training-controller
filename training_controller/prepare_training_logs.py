@@ -19,12 +19,11 @@ ES_PASSWORD = os.environ["ES_PASSWORD"]
 FORMATTED_ES_ENDPOINT = (
     f"https://{ES_USERNAME}:{ES_PASSWORD}@" + ES_ENDPOINT.split("//")[-1]
 )
-TRAINING_DATA_PATH = os.getenv("TRAINING_DATA_PATH", "/var/opni-data")
 
 
 class PrepareTrainingLogs:
     def __init__(self):
-        self.WORKING_DIR = TRAINING_DATA_PATH
+        self.WORKING_DIR = os.getenv("TRAINING_DATA_PATH", "/var/opni-data")
         self.ES_DUMP_DIR = os.path.join(self.WORKING_DIR, "windows")
         self.ES_DUMP_SAMPLE_LOGS_PATH = os.path.join(
             self.WORKING_DIR, "sample_logs.json"
