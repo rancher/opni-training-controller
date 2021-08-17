@@ -14,10 +14,6 @@ from prepare_training_logs import PrepareTrainingLogs
 ES_ENDPOINT = os.environ["ES_ENDPOINT"]
 ES_USERNAME = os.getenv("ES_USERNAME", "admin")
 ES_PASSWORD = os.getenv("ES_PASSWORD", "admin")
-MINIO_SERVER_URL = os.environ["MINIO_SERVER_URL"]
-MINIO_ACCESS_KEY = os.environ["MINIO_ACCESS_KEY"]
-MINIO_SECRET_KEY = os.environ["MINIO_SECRET_KEY"]
-NATS_SERVER_URL = os.environ["NATS_SERVER_URL"]
 DEFAULT_TRAINING_INTERVAL = 1800
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(message)s")
@@ -111,7 +107,7 @@ async def schedule_training_job(payload):
     prepare the training data and launch nulog-train job
     """
     model_to_train = payload["model"]
-    PrepareTrainingLogs("/tmp").run()
+    PrepareTrainingLogs().run()
     if model_to_train == "nulog-train":
         await nw.publish("gpu_trainingjob_status", b"JobStart")  # update gpu status
         await nw.publish(
