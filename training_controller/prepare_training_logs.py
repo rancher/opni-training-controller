@@ -176,15 +176,16 @@ class PrepareTrainingLogs:
         for idx, entry in enumerate(timestamps_list):
             if timestamps_esdump_num_logs_fetched[idx] == 0:
                 continue
+            start_ts, end_ts = entry["start_ts"], entry["end_ts"]
             current_command = esdump_sample_command[:]
             current_command[2] = current_command[2].format(
-                entry["start_ts"], entry["end_ts"]
+                start_ts, end_ts
             )
             current_command[6] = current_command[6].format(
                 timestamps_esdump_num_logs_fetched[idx]
             )
             current_command[10] = current_command[10].format(
-                os.path.join(self.es_dump_data_path, f"training_logs_{idx}.json")
+                os.path.join(self.ES_DUMP_DIR, f"{start_ts}_{end_ts}.json")
             )
             query_queue.append(current_command)
         if len(query_queue) > 0:
@@ -207,6 +208,7 @@ class PrepareTrainingLogs:
             os.remove(json_file_to_process)
         shutil.rmtree(self.es_dump_data_path)
 
+
     def fetch_and_update_timestamps(self,es_instance):
         timestamps_list = []
         try:
@@ -222,10 +224,18 @@ class PrepareTrainingLogs:
             return timestamps_list
         for normal_interval in all_normal_intervals:
             start_ts, end_ts = normal_interval["_source"]["start_ts"], normal_interval["_source"]["end_ts"]
+            file_prefix = "{}_{}".format(start_ts, end_ts)
+            interval_json_files = [
+                file
+                for file in os.listdir(self.ES_DUMP_DIR)
+                if file_prefix in file
+            ]
             if end_ts < oldest_log_timestamp:
                 try:
                     es_instance.delete(index="opni-normal-intervals", doc_type=normal_interval["_type"], id=normal_interval["_id"])
                     logging.info("Deleting old normal time interval from Elasticsearch")
+                    for interval_file in interval_json_files:
+                        os.remove(os.path.join(self.ES_DUMP_DIR,interval_file))
                 except Exception as e:
                     logging.error("Error deleting document from opni-normal-intervals index.")
                     continue
@@ -234,11 +244,14 @@ class PrepareTrainingLogs:
                 try:
                     es_instance.update(index="opni-normal-intervals", doc_type=normal_interval["_type"], id=normal_interval["_id"], body={"doc": {"start_ts": oldest_log_timestamp}})
                     logging.info("Updating time interval within Elasticsearch.")
+                    for interval_file in interval_json_files:
+                        os.remove(os.path.join(self.ES_DUMP_DIR, interval_file))
                 except Exception as e:
                     logging.error("Error updating document within opni-normal-intervals index.")
                     continue
             else:
-                timestamps_list.append({"start_ts": start_ts, "end_ts": end_ts})
+                if len(interval_json_files) == 0:
+                    timestamps_list.append({"start_ts": start_ts, "end_ts": end_ts})
 
         return timestamps_list
 
@@ -260,4 +273,3 @@ class PrepareTrainingLogs:
         num_logs_to_fetch = self.calculate_training_logs_size(free)
         timestamps_list = self.fetch_and_update_timestamps(es_instance)
         self.fetch_training_logs(es_instance, num_logs_to_fetch, timestamps_list)
-        self.create_windows()
