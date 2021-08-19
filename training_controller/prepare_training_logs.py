@@ -3,12 +3,9 @@ import logging
 import os
 import shutil
 import subprocess
-import tarfile
 
 # Third Party
-import boto3
 import pandas as pd
-from botocore.client import Config
 from elasticsearch import Elasticsearch
 from elasticsearch.helpers import scan
 
@@ -24,35 +21,10 @@ FORMATTED_ES_ENDPOINT = (
 class PrepareTrainingLogs:
     def __init__(self):
         self.WORKING_DIR = os.getenv("TRAINING_DATA_PATH", "/var/opni-data")
-        self.ES_DUMP_DIR = os.path.join(self.WORKING_DIR, "windows")
+        self.TRAINING_DIR = os.path.join(self.WORKING_DIR, "windows")
+        self.ES_DUMP_DIR = os.path.join(self.WORKING_DIR, "esdump_path")
         self.ES_DUMP_SAMPLE_LOGS_PATH = os.path.join(
             self.WORKING_DIR, "sample_logs.json"
-        )
-        self.es_dump_data_path = ""
-
-    def save_window(self, window_start_time_ns, df):
-        current_window_json_files = [
-            file
-            for file in os.listdir(self.ES_DUMP_DIR)
-            if str(window_start_time_ns) in file
-        ]
-        df[
-            [
-                "timestamp",
-                "window_start_time_ns",
-                "masked_log",
-                "is_control_plane_log",
-            ]
-        ].to_json(
-            os.path.join(
-                self.ES_DUMP_DIR,
-                "{}_{}.json.gz".format(
-                    window_start_time_ns, len(current_window_json_files)
-                ),
-            ),
-            orient="records",
-            lines=True,
-            compression="gzip",
         )
 
     def disk_size(self):
@@ -189,23 +161,9 @@ class PrepareTrainingLogs:
             query_queue.append(current_command)
         if len(query_queue) > 0:
             self.run_esdump(query_queue)
-
-    def create_windows(self):
-        # For every json file, write/append each time window to own file
-        for es_split_json_file in os.listdir(self.es_dump_data_path):
-            if not ".json" in es_split_json_file:
-                continue
-            json_file_to_process = os.path.join(
-                self.es_dump_data_path, es_split_json_file
-            )
-            df = pd.read_json(json_file_to_process, lines=True)
-            df = pd.json_normalize(df["_source"])
-            df.groupby(["window_start_time_ns"]).apply(
-                lambda x: self.save_window(x.name, x)
-            )
-            # delete ESDumped file
-            os.remove(json_file_to_process)
-        shutil.rmtree(self.es_dump_data_path)
+            return True
+        else:
+            return False
 
 
     def fetch_and_update_timestamps(self,es_instance):
@@ -226,7 +184,7 @@ class PrepareTrainingLogs:
             file_prefix = "{}_{}".format(start_ts, end_ts)
             interval_json_files = [
                 file
-                for file in os.listdir(self.ES_DUMP_DIR)
+                for file in os.listdir(self.TRAINING_DIR)
                 if file_prefix in file
             ]
             if end_ts < oldest_log_timestamp:
@@ -234,7 +192,7 @@ class PrepareTrainingLogs:
                     es_instance.delete(index="opni-normal-intervals", doc_type=normal_interval["_type"], id=normal_interval["_id"])
                     logging.info("Deleting old normal time interval from Elasticsearch")
                     for interval_file in interval_json_files:
-                        os.remove(os.path.join(self.ES_DUMP_DIR,interval_file))
+                        os.remove(os.path.join(self.TRAINING_DIR,interval_file))
                 except Exception as e:
                     logging.error("Error deleting document from opni-normal-intervals index.")
                     continue
@@ -244,7 +202,7 @@ class PrepareTrainingLogs:
                     es_instance.update(index="opni-normal-intervals", doc_type=normal_interval["_type"], id=normal_interval["_id"], body={"doc": {"start_ts": oldest_log_timestamp}})
                     logging.info("Updating time interval within Elasticsearch.")
                     for interval_file in interval_json_files:
-                        os.remove(os.path.join(self.ES_DUMP_DIR, interval_file))
+                        os.remove(os.path.join(self.TRAINING_DIR, interval_file))
                 except Exception as e:
                     logging.error("Error updating document within opni-normal-intervals index.")
                     continue
@@ -254,12 +212,44 @@ class PrepareTrainingLogs:
 
         return timestamps_list
 
+
+    def normalize_json_data(self):
+        # For every json file, write/append each time window to own file
+        for es_split_json_file in os.listdir(self.ES_DUMP_DIR):
+            if not ".json" in es_split_json_file:
+                continue
+            json_file_to_process = os.path.join(
+                self.ES_DUMP_DIR, es_split_json_file
+            )
+            df = pd.read_json(json_file_to_process, lines=True)
+            df = pd.json_normalize(df["_source"])
+            df[
+                [
+                    "timestamp",
+                    "window_start_time_ns",
+                    "masked_log",
+                    "is_control_plane_log",
+                ]
+            ].to_json(
+                os.path.join(
+                    self.TRAINING_DIR,
+                    "{}.json.gz".format(es_split_json_file.split(".json")[0]
+                    ),
+                ),
+                orient="records",
+                lines=True,
+                compression="gzip",
+            )
+            # delete ESDumped file
+            os.remove(json_file_to_process)
+        shutil.rmtree(self.ES_DUMP_DIR)
+
     def run(self):
-        self.es_dump_data_path = os.path.join(self.WORKING_DIR, "esdump_data/")
-        if not os.path.exists(self.es_dump_data_path):
-            os.makedirs(self.es_dump_data_path)
         if not os.path.exists(self.ES_DUMP_DIR):
             os.makedirs(self.ES_DUMP_DIR)
+
+        if not os.path.exists(self.TRAINING_DIR):
+            os.makedirs(self.TRAINING_DIR)
         es_instance = Elasticsearch(
             [ES_ENDPOINT],
             port=9200,
@@ -271,4 +261,7 @@ class PrepareTrainingLogs:
         self.retrieve_sample_logs()
         num_logs_to_fetch = self.calculate_training_logs_size(free)
         timestamps_list = self.fetch_and_update_timestamps(es_instance)
-        self.fetch_training_logs(es_instance, num_logs_to_fetch, timestamps_list)
+        data_exists = self.fetch_training_logs(es_instance, num_logs_to_fetch, timestamps_list)
+        if data_exists:
+            self.normalize_json_data()
+        return data_exists

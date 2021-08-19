@@ -107,8 +107,7 @@ async def schedule_training_job(payload):
     prepare the training data and launch nulog-train job
     """
     model_to_train = payload["model"]
-    PrepareTrainingLogs().run()
-    if model_to_train == "nulog-train":
+    if model_to_train == "nulog-train" and PrepareTrainingLogs().run():
         await nw.publish("gpu_trainingjob_status", b"JobStart")  # update gpu status
         await nw.publish(
             "gpu_service_training_internal", (json.dumps(payload)).encode()
