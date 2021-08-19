@@ -1,7 +1,6 @@
-FROM nikolaik/python-nodejs:python3.8-nodejs14-slim
+FROM rancher/opni-python-base:3.8-node14-elasticdump
 WORKDIR /app
 COPY ./training_controller/ /app/
 RUN chmod a+rwx -R /app
-RUN pip install --no-cache-dir -r requirements.txt
-RUN npm install elasticdump -g
+
 CMD ["python", "main.py"]
