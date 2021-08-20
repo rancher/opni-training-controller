@@ -185,37 +185,6 @@ class PrepareTrainingLogs:
         for interval_file in interval_json_files:
             os.remove(os.path.join(self.TRAINING_DIR, interval_file))
 
-    def delete_interval_from_elasticsearch(self, es_instance, normal_interval):
-        # Delete the old time interval from Elasticsearch index opni-normal-intervals.
-        try:
-            es_instance.delete(
-                index="opni-normal-intervals",
-                doc_type=normal_interval["_type"],
-                id=normal_interval["_id"],
-            )
-            logging.info("Deleting old normal time interval from Elasticsearch")
-            return True
-        except Exception as e:
-            logging.error("Error deleting document from opni-normal-intervals index.")
-            return False
-
-    def update_interval_on_elasticsearch(
-        self, es_instance, normal_interval, updated_ts
-    ):
-        # Update time interval on Elasticsearch index "opni-normal-intervals".
-        try:
-            es_instance.update(
-                index="opni-normal-intervals",
-                doc_type=normal_interval["_type"],
-                id=normal_interval["_id"],
-                body={"doc": {"start_ts": updated_ts}},
-            )
-            logging.info("Updating time interval within Elasticsearch.")
-            return True
-        except Exception as e:
-            logging.error("Error updating document on opni-normal-intervals index.")
-            return False
-
     def update_delete_interval_on_elasticsearch(
         self, es_instance, normal_interval, flag, updated_ts=None
     ):
