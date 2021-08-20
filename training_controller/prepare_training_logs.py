@@ -26,17 +26,21 @@ class PrepareTrainingLogs:
         self.ES_DUMP_SAMPLE_LOGS_PATH = os.path.join(
             self.WORKING_DIR, "sample_logs.json"
         )
-
+    '''
+    Fetch size of disk
+    '''
     def disk_size(self):
-        # Fetch size of disk
         logging.info("Fetching size of the disk")
         total, used, free = shutil.disk_usage("/")
         logging.info("Disk Total: %d GiB" % (total // (2 ** 30)))
         logging.info("Disk Used: %d GiB" % (used // (2 ** 30)))
         logging.info("Disk Free: %d GiB" % (free // (2 ** 30)))
         return free
-
+    '''
+    Fetch the logs from each time interval within query_commands using Elasticdump.
+    '''
     def run_esdump(self, query_commands):
+        #Fetch the logs from each time interval within query_commands using Elasticdump.
         current_processes = set()
         max_processes = 2
         while len(query_commands) > 0:
@@ -58,9 +62,10 @@ class PrepareTrainingLogs:
                 else:
                     finished_processes.add(p)
             current_processes -= finished_processes
-
+    '''
+    Get the last 10000 logs from Elasticsearch.
+    '''
     def retrieve_sample_logs(self):
-        # Get the first 10k logs
         logging.info("Retrieve sample logs from ES")
         es_dump_cmd = (
             'elasticdump --searchBody \'{"query": { "match_all": {} }, "_source": ["masked_log", "timestamp"], "sort": [{"timestamp": {"order": "desc"}}]}\' --retryAttempts 10 --size=10000 --limit 10000 --input=%s/logs --output=%s --type=data'
@@ -72,9 +77,10 @@ class PrepareTrainingLogs:
             logging.info("Sampled downloaded successfully")
         else:
             logging.error("Sample failed to download")
-
+    '''
+    Determine average size per log message
+    '''
     def calculate_training_logs_size(self, free):
-        # Determine average size per log message
         sample_logs_bytes_size = os.path.getsize(self.ES_DUMP_SAMPLE_LOGS_PATH)
         num_lines = sum(1 for line in open(self.ES_DUMP_SAMPLE_LOGS_PATH))
         average_size_per_log_message = sample_logs_bytes_size / num_lines
@@ -84,7 +90,9 @@ class PrepareTrainingLogs:
         num_logs_to_fetch = int((free * 0.8) / average_size_per_log_message)
         logging.info(f"Maximum number of log messages to fetch = {num_logs_to_fetch}")
         return num_logs_to_fetch
-
+    '''
+    For each of the time intervals, fetch the number of logs present within that span.
+    '''
     def get_log_count(self, es_instance, timestamps_list, num_logs_to_fetch):
         timestamps_esdump_num_logs_fetched = dict()
         total_number_of_logs = 0
@@ -123,8 +131,11 @@ class PrepareTrainingLogs:
                 )
 
         return timestamps_esdump_num_logs_fetched
-
+    '''
+    This function will customize the Elasticdump query for each interval within timestamps_list and then fetch the logs by calling the run_esdump method.
+    '''
     def fetch_training_logs(self, es_instance, num_logs_to_fetch, timestamps_list):
+        # Retrieve the number of logs to fetch for each time interval.
         timestamps_esdump_num_logs_fetched = self.get_log_count(
             es_instance, timestamps_list, num_logs_to_fetch
         )
@@ -159,69 +170,99 @@ class PrepareTrainingLogs:
                 os.path.join(self.ES_DUMP_DIR, f"{filename}")
             )
             query_queue.append(current_command)
+        '''
+        If at least one time interval within timestamps_list has a non zero amount of logs, call the es_dump command 
+        and return True to indicate that there is new training data. Otherwise return False
+        '''
         if len(query_queue) > 0:
             self.run_esdump(query_queue)
             return True
         else:
             return False
 
-
+    '''
+    This method will return a list of time intervals that have not already been fetched from Elasticsearch.
+    '''
     def fetch_and_update_timestamps(self,es_instance):
+        #List that will store dictionaries with three keys: start_ts, end_ts and filename.
         timestamps_list = []
         try:
+            #Obtain the oldest and newest logs from Elasticsearch
             oldest_log = es_instance.search(index="logs", body={"aggs": {"min_ts": {"min": { "field": "timestamp"}}}, "_source": ["timestamp"]}, size=1)
             newest_log = es_instance.search(index="logs", body={"aggs": {"max_ts": {"max": { "field": "timestamp"}}}, "_source": ["timestamp"]}, size=1)
         except Exception as e:
             logging.error(e)
             return timestamps_list
+        #Retrieve the oldest and newest log timestamps.
         oldest_log_timestamp = int(oldest_log["aggregations"]["min_ts"]["value"])
         newest_log_timestamp = int(newest_log["aggregations"]["max_ts"]["value"])
+        #Retrieve all the current normal training intervals from Elasticsearch.
         try:
             all_normal_intervals = scan(es_instance, index="opni-normal-intervals", query={"query": {"match_all": {}}})
         except Exception as e:
             logging.error("Error trying to retrieve all normal intervals from opni-normal-intervals index")
             return timestamps_list
+        #Retrieve all of the files currently stored in self.TRAINING_DIR
+        all_training_files = os.listdir(self.TRAINING_DIR)
         for normal_interval in all_normal_intervals:
             start_ts, end_ts = normal_interval["_source"]["start_ts"], normal_interval["_source"]["end_ts"]
             full_file_prefix = "{}_{}".format(start_ts, end_ts)
+            #Fetch only the files within the all_training_files list which contain the full_file_prefix.
             interval_json_files = [
                 file
-                for file in os.listdir(self.TRAINING_DIR)
+                for file in all_training_files
                 if full_file_prefix in file
             ]
+            #If the end_ts is before the oldest_log_timestamp, then that interval should be removed from Elasticsearch as the data no longer exists.
             if end_ts < oldest_log_timestamp:
                 try:
+                    #Delete the old time interval from Elasticsearch.
                     es_instance.delete(index="opni-normal-intervals", doc_type=normal_interval["_type"], id=normal_interval["_id"])
                     logging.info("Deleting old normal time interval from Elasticsearch")
+                    #Delete any file from self.TRAINING_DIR which corresponds to this interval as this data has been removed from Elasticsearch.
                     for interval_file in interval_json_files:
                         os.remove(os.path.join(self.TRAINING_DIR,interval_file))
                         logging.info("Removing old JSON training files where the time interval within opni-normal-intervals was deleted.")
                 except Exception as e:
                     logging.error("Error deleting document from opni-normal-intervals index.")
                     continue
+            #Address scenarios where start_ts comes before the oldest_log_timestamp
             elif start_ts < oldest_log_timestamp:
+                '''
+                If end_ts is after the newest_log_timestamp, then set the start_ts to oldest_log_timestamp, 
+                keep the end_ts the same and set the filename to be named with the oldest_log_timestamp and 
+                newest_log_timestamp. Otherwise, set the filename to be named after the oldest_log_timestamp and end_ts. 
+                '''
                 if end_ts > newest_log_timestamp:
                     timestamps_list.append({"start_ts": oldest_log_timestamp, "end_ts": end_ts,"filename": "{}_{}.json".format(oldest_log_timestamp, newest_log_timestamp)})
                 else:
                     timestamps_list.append({"start_ts": oldest_log_timestamp, "end_ts": end_ts, "filename": "{}_{}.json".format(oldest_log_timestamp, end_ts)})
                 try:
+                    #Update this time interval within Elasticsearch by setting the start_ts to oldest_log_timestamp.
                     es_instance.update(index="opni-normal-intervals", doc_type=normal_interval["_type"], id=normal_interval["_id"], body={"doc": {"start_ts": oldest_log_timestamp}})
                     logging.info("Updating time interval within Elasticsearch.")
+                    #Delete any files from self.TRAINING_DIR which corresponds to this time interval before the update was made.
                     for interval_file in interval_json_files:
                         logging.info("Removing old JSON training files where the time interval within opni-normal-intervals was updated.")
                         os.remove(os.path.join(self.TRAINING_DIR, interval_file))
                 except Exception as e:
                     logging.error("Error updating document within opni-normal-intervals index.")
                     continue
+            #Address scenario where start_ts is on or after oldest_log_timestamp and end_ts is after newest_log_timestamp.
             elif end_ts > newest_log_timestamp:
+                #Set the filename to be named with the start_ts amd newest_log_timestamp
                 timestamps_list.append({"start_ts": start_ts, "end_ts": end_ts, "filename": "{}_{}.json".format(start_ts, newest_log_timestamp)})
+            #Address scenario where start_ts is on or after oldest_log_timestamp and end_ts is before or on newest_log_timestamp.
             else:
+                #If there already exist files with the filename prefix, do not fetch that data again.
                 if len(interval_json_files) == 0:
+                    #Fetch the files within self.TRAINING_DIR that contain just the start_ts in its name
                     start_ts_interval_json_files = [
                         file
-                        for file in os.listdir(self.TRAINING_DIR)
+                        for file in all_training_files
                         if str(start_ts) in file
                     ]
+                    #Get the files within TRAINING_DIR with the same start_ts but different end_ts and remove those files.
                     for old_start_ts_file in start_ts_interval_json_files:
                         logging.info("Removing old JSON training files with the same starting timestamp but updated ending timestamp.")
                         os.remove(os.path.join(self.TRAINING_DIR, old_start_ts_file))
@@ -231,7 +272,7 @@ class PrepareTrainingLogs:
 
 
     def normalize_json_data(self):
-        # For every json file, write/append each time window to own file
+        # For every json file obtained through Elasticdump, normalize the _source field and dump that result into the self.TRAINING_DIR directory.
         for es_split_json_file in os.listdir(self.ES_DUMP_DIR):
             if not ".json" in es_split_json_file:
                 continue
@@ -259,6 +300,7 @@ class PrepareTrainingLogs:
             )
             # delete ESDumped file
             os.remove(json_file_to_process)
+        # Delete the ES_DUMP_DIR as well.
         shutil.rmtree(self.ES_DUMP_DIR)
 
     def run(self):
