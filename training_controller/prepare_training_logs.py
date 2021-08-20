@@ -60,7 +60,7 @@ class PrepareTrainingLogs:
                     finished_processes.add(p)
             current_processes -= finished_processes
 
-    def retrieve_sample_logs(self):
+    def retrieve_sample_logs_from_elasticsearch(self):
         # Get the last 10000 logs from Elasticsearch.
 
         logging.info("Retrieve sample logs from ES")
@@ -125,7 +125,9 @@ class PrepareTrainingLogs:
 
         return timestamps_esdump_num_logs_fetched
 
-    def fetch_training_logs(self, es_instance, num_logs_to_fetch, timestamps_list):
+    def fetch_training_logs_from_elasticsearch(
+        self, es_instance, num_logs_to_fetch, timestamps_list
+    ):
         # This function will customize the Elasticdump query for each interval within timestamps_list and then fetch the logs by calling the run_esdump method.
 
         timestamps_esdump_num_logs_fetched = self.get_log_count(
@@ -431,10 +433,10 @@ class PrepareTrainingLogs:
             use_ssl=True,
         )
         free = self.fetch_disk_size()
-        self.retrieve_sample_logs()
+        self.retrieve_sample_logs_from_elasticsearch()
         num_logs_to_fetch = self.calculate_training_logs_size(free)
         timestamps_list = self.fetch_and_update_timestamps(es_instance)
-        data_exists = self.fetch_training_logs(
+        data_exists = self.fetch_training_logs_from_elasticsearch(
             es_instance, num_logs_to_fetch, timestamps_list
         )
         if data_exists:
