@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from datetime import datetime
 
 # Third Party
@@ -15,6 +16,7 @@ ES_ENDPOINT = os.environ["ES_ENDPOINT"]
 ES_USERNAME = os.getenv("ES_USERNAME", "admin")
 ES_PASSWORD = os.getenv("ES_PASSWORD", "admin")
 DEFAULT_TRAINING_INTERVAL = 1800
+GPU_TRAINING_RESET_TIME = 3600
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(message)s")
 nw = NatsWrapper()
@@ -26,6 +28,7 @@ es = AsyncElasticsearch(
     use_ssl=True,
 )
 gpu_training_request = 0
+last_trainingjob_time = 0
 
 
 async def update_es_job_status(
@@ -140,18 +143,30 @@ async def consume_request():
 
     async def gpu_available(msg):
         global gpu_training_request
+        global last_trainingjob_time
         message = msg.data.decode()
         logging.info(f"message from training : {message}")
         if (
             message == "JobStart"
         ):  ## "JobStart" is published from frunction schedule_training_job()
             gpu_training_request += 1
+            last_trainingjob_time = time.time()
         elif message == "JobEnd":  ## "JobEnd" is published from nulog-train contrainer
             gpu_training_request -= 1
+        elif message == "JobReset":
+            logging.info("Reset training job status.")
+            gpu_training_request = 0
 
     async def receive_and_reply(msg):
+        global last_trainingjob_time
         reply_subject = msg.reply
         if gpu_training_request > 0:
+            if (
+                last_trainingjob_time > 0
+                and time.time() - last_trainingjob_time > GPU_TRAINING_RESET_TIME
+            ):
+                await nw.publish("gpu_trainingjob_status", b"JobReset")
+                last_trainingjob_time = 0
             reply_message = b"NO"
         else:  ## gpu service available for inference
             await nw.publish(
@@ -176,7 +191,6 @@ if __name__ == "__main__":
     loop.run_until_complete(task)
     consume_request_coroutine = consume_request()
     main_coroutine = main()
-    logging.info("start gpu-service-controller...")
     loop.run_until_complete(
         asyncio.gather(main_coroutine, consume_request_coroutine, es_training_signal())
     )
