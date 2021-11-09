@@ -135,7 +135,7 @@ class PrepareTrainingLogs:
         )
         # ESDump logs
         esdump_sample_command = [
-            "elasticdump",
+            "/usr/local/bin/elasticdump",
             "--searchBody",
             '{{"query": {{"bool": {{"must": [{{"match":{{"drain_error_keyword":false}}}}, {{"term": {{"is_control_plane_log": false}}}},{{"range": {{"timestamp": {{"gte": {},"lt": {}}}}}}}]}}}} ,"_source": ["masked_log", "timestamp", "is_control_plane_log", "window_start_time_ns", "_id"], "sort": [{{"timestamp": {{"order": "desc"}}}}]}}',
             "--retryAttempts",
