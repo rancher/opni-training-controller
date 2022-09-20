@@ -31,9 +31,9 @@ class PrepareTrainingLogs:
         # Fetch size of disk
         logging.info("Fetching size of the disk")
         total, used, free = shutil.disk_usage("/")
-        logging.info("Disk Total: %d GiB" % (total // (2 ** 30)))
-        logging.info("Disk Used: %d GiB" % (used // (2 ** 30)))
-        logging.info("Disk Free: %d GiB" % (free // (2 ** 30)))
+        logging.info("Disk Total: %d GiB" % (total // (2**30)))
+        logging.info("Disk Used: %d GiB" % (used // (2**30)))
+        logging.info("Disk Free: %d GiB" % (free // (2**30)))
         return free
 
     def run_esdump(self, query_commands):
@@ -65,7 +65,7 @@ class PrepareTrainingLogs:
 
         logging.info("Retrieve sample logs from ES")
         es_dump_cmd = (
-            'elasticdump --searchBody \'{"query": { "match_all": {} }, "_source": ["masked_log", "timestamp"], "sort": [{"timestamp": {"order": "desc"}}]}\' --retryAttempts 10 --size=10000 --limit 10000 --input=%s/logs --output=%s --type=data'
+            'elasticdump --searchBody \'{"query": { "match_all": {} }, "_source": ["log", "time"], "sort": [{"time": {"order": "desc"}}]}\' --retryAttempts 10 --size=10000 --limit 10000 --input=%s/logs --output=%s --type=data'
             % (FORMATTED_ES_ENDPOINT, self.ES_DUMP_SAMPLE_LOGS_PATH)
         )
         subprocess.run(es_dump_cmd, shell=True)
@@ -126,6 +126,57 @@ class PrepareTrainingLogs:
         return timestamps_esdump_num_logs_fetched
 
     def fetch_training_logs_from_elasticsearch(
+        self, es_instance, num_logs_to_fetch, timestamps_list
+    ):
+        # This function will customize the Elasticdump query for each interval within timestamps_list and then fetch the logs by calling the run_esdump method.
+
+        timestamps_esdump_num_logs_fetched = self.get_log_count(
+            es_instance, timestamps_list, num_logs_to_fetch
+        )
+        # ESDump logs
+        esdump_sample_command = [
+            "/usr/local/bin/elasticdump",
+            "--searchBody",
+            '{{"query": {{"bool": {{"must": [{{"match":{{"drain_error_keyword":false}}}}, {{"term": {{"is_control_plane_log": false}}}},{{"range": {{"timestamp": {{"gte": {},"lt": {}}}}}}}]}}}} ,"_source": ["masked_log", "timestamp", "is_control_plane_log", "window_start_time_ns", "_id"], "sort": [{{"timestamp": {{"order": "desc"}}}}]}}',
+            "--retryAttempts",
+            "100",
+            "--fileSize=50mb",
+            "--size={}",
+            "--limit",
+            "10000",
+            f"--input={FORMATTED_ES_ENDPOINT}/logs",
+            "--output={}",
+            "--type=data",
+        ]
+        query_queue = []
+        for idx, entry in enumerate(timestamps_list):
+            if timestamps_esdump_num_logs_fetched[idx] == 0:
+                continue
+            start_ts, end_ts, filename = (
+                entry["start_ts"],
+                entry["end_ts"],
+                entry["filename"],
+            )
+            current_command = esdump_sample_command[:]
+            current_command[2] = current_command[2].format(start_ts, end_ts)
+            current_command[6] = current_command[6].format(
+                timestamps_esdump_num_logs_fetched[idx]
+            )
+            current_command[10] = current_command[10].format(
+                os.path.join(self.ES_DUMP_DIR, f"{filename}")
+            )
+            query_queue.append(current_command)
+        """
+        If at least one time interval within timestamps_list has a non zero amount of logs, call the es_dump command
+        and return True to indicate that there is new training data. Otherwise return False
+        """
+        if len(query_queue) > 0:
+            self.run_esdump(query_queue)
+            return True
+        else:
+            return False
+
+    def fetch_training_logs_from_opensearch(
         self, es_instance, num_logs_to_fetch, timestamps_list
     ):
         # This function will customize the Elasticdump query for each interval within timestamps_list and then fetch the logs by calling the run_esdump method.
@@ -411,3 +462,14 @@ class PrepareTrainingLogs:
         if data_exists:
             self.normalize_json_data()
         return data_exists
+
+    def get_num_logs_for_training(self):
+        if not os.path.exists(self.ES_DUMP_DIR):
+            os.makedirs(self.ES_DUMP_DIR)
+
+        if not os.path.exists(self.TRAINING_DIR):
+            os.makedirs(self.TRAINING_DIR)
+        free = self.fetch_disk_size()
+        self.retrieve_sample_logs_from_elasticsearch()
+        num_logs_to_fetch = self.calculate_training_logs_size(free)
+        return num_logs_to_fetch

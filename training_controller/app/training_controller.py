@@ -9,9 +9,10 @@ from datetime import datetime
 # Third Party
 from elasticsearch import AsyncElasticsearch, exceptions
 from elasticsearch.helpers import async_streaming_bulk
+from fastapi import FastAPI
 from opni_nats import NatsWrapper
-from prepare_training_logs import PrepareTrainingLogs
 
+# Opensearch config values
 ES_ENDPOINT = os.environ["ES_ENDPOINT"]
 ES_USERNAME = os.getenv("ES_USERNAME", "admin")
 ES_PASSWORD = os.getenv("ES_PASSWORD", "admin")
@@ -29,6 +30,50 @@ es = AsyncElasticsearch(
 )
 gpu_training_request = 0
 last_trainingjob_time = 0
+
+es_instance = AsyncElasticsearch(
+    [ES_ENDPOINT],
+    port=9200,
+    http_compress=True,
+    http_auth=(ES_USERNAME, ES_PASSWORD),
+    verify_certs=False,
+    use_ssl=True,
+)
+
+app = FastAPI()
+
+
+@app.get("/train_model")
+async def train_model(workload_parameters: str):
+    workload_parameters_dict = json.loads(workload_parameters)
+    model_logs_query_body = {
+        "query": {
+            "bool": {
+                "should": [],
+            },
+        },
+    }
+    for cluster_id in workload_parameters_dict:
+        for namespace_name in workload_parameters_dict[cluster_id]:
+            for pod_name in workload_parameters_dict[cluster_id][namespace_name]:
+                bool_must_query = {
+                    "bool": {
+                        "must": [
+                            {"match": {"cluster_id": cluster_id}},
+                            {"match": {"kubernetes.namespace_name": namespace_name}},
+                            {"match": {"kubernetes.pod_name": pod_name}},
+                        ]
+                    }
+                }
+                model_logs_query_body["query"]["bool"]["should"].append(bool_must_query)
+    # This function handles get requests for fetching pod,namespace and workload breakdown insights.
+    logging.info(f"Received request to train model.")
+    try:
+        await nw.publish("train", json.dumps(model_logs_query_body).encode())
+        await nw.publish("workload_parameters", workload_parameters)
+    except Exception as e:
+        # Bad Request
+        logging.error(e)
 
 
 async def update_es_job_status(
@@ -70,8 +115,8 @@ async def es_training_signal():
         "model_to_train": "nulog",
         "time_intervals": [
             {
-                "start_ts": (current_time - DEFAULT_TRAINING_INTERVAL) * (10 ** 9),
-                "end_ts": current_time * (10 ** 9),
+                "start_ts": (current_time - DEFAULT_TRAINING_INTERVAL) * (10**9),
+                "end_ts": current_time * (10**9),
             }
         ],
     }
@@ -110,7 +155,7 @@ async def schedule_training_job(payload):
     prepare the training data and launch nulog-train job
     """
     model_to_train = payload["model"]
-    if model_to_train == "nulog-train" and PrepareTrainingLogs().run():
+    if model_to_train == "nulog-train":
         await nw.publish("gpu_trainingjob_status", b"JobStart")  # update gpu status
         await nw.publish(
             "gpu_service_training_internal", (json.dumps(payload)).encode()
@@ -128,6 +173,7 @@ async def main():
             }
             await schedule_training_job(training_job_payload)
             logging.info("Just received signal to begin running the jobs")
+            logging.info(decoded_payload)
         except Exception as e:
             logging.error(e)
 
@@ -169,9 +215,7 @@ async def consume_request():
                 last_trainingjob_time = 0
             reply_message = b"NO"
         else:  ## gpu service available for inference
-            await nw.publish(
-                nats_subject="gpu_service_inference_internal", payload_df=msg.data
-            )
+            await nw.publish("gpu_service_inference_internal", msg.data)
             reply_message = b"YES"
         logging.info(f"received inferencing request. response : {reply_message}")
         await nw.publish(reply_subject, reply_message)
@@ -190,9 +234,15 @@ if __name__ == "__main__":
     task = loop.create_task(init_nats())
     loop.run_until_complete(task)
     consume_request_coroutine = consume_request()
+    es_training_signal_coroutine = es_training_signal()
+
     main_coroutine = main()
     loop.run_until_complete(
-        asyncio.gather(main_coroutine, consume_request_coroutine, es_training_signal())
+        asyncio.gather(
+            main_coroutine,
+            consume_request_coroutine,
+            es_training_signal_coroutine,
+        )
     )
     try:
         loop.run_forever()
