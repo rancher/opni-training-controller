@@ -9,7 +9,6 @@ import time
 import boto3
 from botocore.client import Config
 from elasticsearch import AsyncElasticsearch
-from fastapi import FastAPI
 from opni_nats import NatsWrapper
 from prepare_training_logs import PrepareTrainingLogs
 
@@ -38,7 +37,6 @@ s3_client = boto3.resource(
     config=Config(signature_version="s3v4"),
 )
 
-app = FastAPI()
 nw = NatsWrapper()
 GPU_TRAINING_RESET_TIME = 3600
 gpu_training_request = 0
@@ -46,55 +44,6 @@ last_trainingjob_time = 0
 workload_parameters_dict = dict()
 
 
-def get_namespace_deployment_breakdown(pod_aggregation_data):
-    # Get the breakdown of log messages by namespace and pod name.
-    ns_pod_aggregation_dict = dict()
-    try:
-        for batch in pod_aggregation_data:
-            for each_result in batch:
-                namespace_name, pod_name, doc_count = (
-                    each_result["key"]["namespace_name"],
-                    each_result["key"]["deployment_name"],
-                    each_result["doc_count"],
-                )
-                if not namespace_name in ns_pod_aggregation_dict:
-                    ns_pod_aggregation_dict[namespace_name] = dict()
-                if not pod_name in ns_pod_aggregation_dict[namespace_name]:
-                    ns_pod_aggregation_dict[namespace_name][pod_name] = doc_count
-        return ns_pod_aggregation_dict
-    except Exception as e:
-        logging.error(f"Unable to aggregate pod data. {e}")
-        return ns_pod_aggregation_dict
-
-
-async def get_aggregated_data(query_body):
-    # Given an Elasticsearch query, fetch all results using composite aggregation.
-    all_aggregation_results = []
-    while True:
-        try:
-            aggregation_results = await es_instance.search(
-                index="logs", body=query_body
-            )
-            # If an after_key is present, use it to fetch the next batch of aggregations from Elasticsearch. Otherwise, return all aggregations.
-            if "after_key" in aggregation_results["aggregations"]["bucket"]:
-                after_key = aggregation_results["aggregations"]["bucket"]["after_key"]
-                query_body["aggs"]["bucket"]["composite"]["after"] = after_key
-                all_aggregation_results.append(
-                    aggregation_results["aggregations"]["bucket"]["buckets"]
-                )
-            else:
-                return all_aggregation_results
-        except Exception as e:
-            logging.error(e)
-            return all_aggregation_results
-
-
-@app.get("/storage_space")
-async def get_storage_space():
-    return PrepareTrainingLogs().get_num_logs_for_training()
-
-
-@app.get("/train_model")
 async def train_model(workload_parameters: str):
     if gpu_training_request == 0:
         global workload_parameters_dict
@@ -144,57 +93,15 @@ async def train_model(workload_parameters: str):
         try:
             await nw.publish("workload_parameters", workload_parameters.encode())
             await nw.publish("train", json.dumps(payload_query).encode())
-            return "submitted request to train model"
+            return b"submitted request to train model"
         except Exception as e:
             # Bad Request
             logging.error(e)
+            return b"currently unable to train model. please try again later"
     else:
-        return "currently unable to train model currently. please try again later."
+        return b"currently unable to train model. please try again later."
 
 
-@app.get("/get_workloads")
-async def get_workloads(cluster_id: str):
-    other_query_body = {
-        "size": 0,
-        "query": {
-            "bool": {
-                "must": [
-                    {"match": {"cluster_id": cluster_id}},
-                    {"match": {"log_type": "workload"}},
-                    {"regexp": {"kubernetes.namespace_name.keyword": ".+"}},
-                    {"regexp": {"deployment.keyword": ".+"}},
-                ],
-            }
-        },
-        "aggs": {
-            "bucket": {
-                "composite": {
-                    "size": 1000,
-                    "sources": [
-                        {
-                            "namespace_name": {
-                                "terms": {"field": "kubernetes.namespace_name.keyword"}
-                            }
-                        },
-                        {"deployment_name": {"terms": {"field": "deployment.keyword"}}},
-                    ],
-                }
-            }
-        },
-    }
-    try:
-        pod_aggregation_data = await get_aggregated_data(other_query_body)
-        logging.info(pod_aggregation_data)
-        namespace_pod_breakdown_dict = get_namespace_deployment_breakdown(
-            pod_aggregation_data
-        )
-        return namespace_pod_breakdown_dict
-    except Exception as e:
-        logging.error(f"Unable to breakdown pod insights. {e}")
-        return {}
-
-
-@app.get("/get_model_parameters")
 async def get_model_parameters():
     return workload_parameters_dict
 
@@ -210,15 +117,14 @@ def verify_model_saved():
         return False
 
 
-@app.get("/get_model_status")
 async def get_model_status():
     if gpu_training_request > 0:
-        return "training"
+        return b"training"
     else:
         if verify_model_saved():
-            return "completed"
+            return b"completed"
         else:
-            return "not started"
+            return b"not started"
 
 
 async def get_latest_workload():
@@ -249,7 +155,7 @@ async def consume_request():
         logging.info(f"message from training : {message}")
         if (
             message == "JobStart"
-        ):  ## "JobStart" is published from frunction schedule_training_job()
+        ):  ## "JobStart" is published from function schedule_training_job()
             gpu_training_request += 1
             last_trainingjob_time = time.time()
         elif message == "JobEnd":  ## "JobEnd" is published from nulog-train contrainer
@@ -277,6 +183,31 @@ async def consume_request():
 
     await nw.subscribe("gpu_trainingjob_status", subscribe_handler=gpu_available)
     await nw.subscribe("gpu_service_inference", subscribe_handler=receive_and_reply)
+
+
+async def endpoint_backends():
+    async def model_status_sub_handler(msg):
+        reply_subject = msg.reply
+        reply_message = await get_model_status()
+        await nw.publish(reply_subject, reply_message)
+
+    async def workload_parameters_sub_handler(msg):
+        reply_subject = msg.reply
+        reply_message = json.dumps(workload_parameters_dict).encode()
+        await nw.publish(reply_subject, reply_message)
+
+    async def train_model_sub_handler(msg):
+        reply_subject = msg.reply
+        training_payload = msg.data.decode()
+        await nw.publish(reply_subject, b"training job submitted")
+        reply_message = await train_model(training_payload)
+        logging.info(reply_message.decode())
+
+    await nw.subscribe("model_status", subscribe_handler=model_status_sub_handler)
+    await nw.subscribe(
+        "workload_parameters", subscribe_handler=workload_parameters_sub_handler
+    )
+    await nw.subscribe("train_model", subscribe_handler=train_model_sub_handler)
 
 
 async def schedule_training_job(payload):
@@ -314,11 +245,19 @@ async def init_nats():
     await nw.connect()
 
 
-@app.on_event("startup")
-async def startup_event():
-    logging.info("Here we are on startup!!!!")
-    init_nats_task = asyncio.create_task(init_nats())
-    await init_nats_task
-    workload_task = asyncio.create_task(get_latest_workload())
-    await workload_task
-    await asyncio.gather(main(), consume_request())
+if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    task = loop.create_task(init_nats())
+    loop.run_until_complete(task)
+    consume_request_coroutine = consume_request()
+    plugin_backends_coroutine = endpoint_backends()
+    main_coroutine = main()
+    loop.run_until_complete(
+        asyncio.gather(
+            main_coroutine, consume_request_coroutine, plugin_backends_coroutine
+        )
+    )
+    try:
+        loop.run_forever()
+    finally:
+        loop.close()
