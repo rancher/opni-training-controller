@@ -166,10 +166,7 @@ class PrepareTrainingLogs:
                 os.path.join(self.ES_DUMP_DIR, f"{filename}")
             )
             query_queue.append(current_command)
-        """
-        If at least one time interval within timestamps_list has a non zero amount of logs, call the es_dump command
-        and return True to indicate that there is new training data. Otherwise return False
-        """
+        # If at least one time interval within timestamps_list has a non zero amount of logs, call the es_dump command and return True
         if len(query_queue) > 0:
             self.run_esdump(query_queue)
             return True
