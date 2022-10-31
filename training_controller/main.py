@@ -54,9 +54,13 @@ async def train_model(workload_parameters: str):
             body={"time": current_ts, "parameters": workload_parameters},
         )
         max_logs_for_training = PrepareTrainingLogs().get_num_logs_for_training()
+        logging.info(max_logs_for_training)
+        end_ts = int(time.time() * 1000)
+        start_ts = end_ts - 3600000
         model_logs_query_body = {
             "query": {
                 "bool": {
+                    "filter": [{"range": {"time": {"gte": start_ts, "lte": end_ts}}}],
                     "minimum_should_match": 1,
                     "should": [],
                 }
