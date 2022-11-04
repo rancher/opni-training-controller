@@ -65,7 +65,7 @@ class PrepareTrainingLogs:
 
         logging.info("Retrieve sample logs from ES")
         es_dump_cmd = (
-            'elasticdump --searchBody \'{"query": { "match_all": {} }, "_source": ["log", "time"], "sort": [{"time": {"order": "desc"}}]}\' --retryAttempts 10 --size=10000 --limit 10000 --input=%s/logs --output=%s --type=data'
+            'NODE_TLS_REJECT_UNAUTHORIZED=0 elasticdump --searchBody \'{"query": { "match_all": {} }, "_source": ["log", "time"], "sort": [{"time": {"order": "desc"}}]}\' --retryAttempts 10 --size=10000 --limit 10000 --input=%s/logs --output=%s --type=data'
             % (FORMATTED_ES_ENDPOINT, self.ES_DUMP_SAMPLE_LOGS_PATH)
         )
         subprocess.run(es_dump_cmd, shell=True)
@@ -450,7 +450,6 @@ class PrepareTrainingLogs:
             use_ssl=True,
         )
         free = self.fetch_disk_size()
-        os.environ["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
         self.retrieve_sample_logs_from_elasticsearch()
         num_logs_to_fetch = self.calculate_training_logs_size(free)
         timestamps_list = self.fetch_and_update_timestamps(es_instance)
@@ -459,7 +458,6 @@ class PrepareTrainingLogs:
         )
         if data_exists:
             self.normalize_json_data()
-        os.environ["NODE_TLS_REJECT_UNAUTHORIZED"] = "1"
         return data_exists
 
     def get_num_logs_for_training(self):
