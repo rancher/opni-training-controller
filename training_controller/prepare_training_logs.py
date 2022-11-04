@@ -6,7 +6,6 @@ import subprocess
 
 # Third Party
 import pandas as pd
-from elasticsearch import Elasticsearch
 from elasticsearch.helpers import scan
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(message)s")
@@ -125,6 +124,7 @@ class PrepareTrainingLogs:
 
         return timestamps_esdump_num_logs_fetched
 
+    """
     def fetch_training_logs_from_elasticsearch(
         self, es_instance, num_logs_to_fetch, timestamps_list
     ):
@@ -172,57 +172,7 @@ class PrepareTrainingLogs:
             return True
         else:
             return False
-
-    def fetch_training_logs_from_opensearch(
-        self, es_instance, num_logs_to_fetch, timestamps_list
-    ):
-        # This function will customize the Elasticdump query for each interval within timestamps_list and then fetch the logs by calling the run_esdump method.
-
-        timestamps_esdump_num_logs_fetched = self.get_log_count(
-            es_instance, timestamps_list, num_logs_to_fetch
-        )
-        # ESDump logs
-        esdump_sample_command = [
-            "/usr/local/bin/elasticdump",
-            "--searchBody",
-            '{{"query": {{"bool": {{"must": [{{"match":{{"drain_error_keyword":false}}}}, {{"term": {{"is_control_plane_log": false}}}},{{"range": {{"timestamp": {{"gte": {},"lt": {}}}}}}}]}}}} ,"_source": ["masked_log", "timestamp", "is_control_plane_log", "window_start_time_ns", "_id"], "sort": [{{"timestamp": {{"order": "desc"}}}}]}}',
-            "--retryAttempts",
-            "100",
-            "--fileSize=50mb",
-            "--size={}",
-            "--limit",
-            "10000",
-            f"--input={FORMATTED_ES_ENDPOINT}/logs",
-            "--output={}",
-            "--type=data",
-        ]
-        query_queue = []
-        for idx, entry in enumerate(timestamps_list):
-            if timestamps_esdump_num_logs_fetched[idx] == 0:
-                continue
-            start_ts, end_ts, filename = (
-                entry["start_ts"],
-                entry["end_ts"],
-                entry["filename"],
-            )
-            current_command = esdump_sample_command[:]
-            current_command[2] = current_command[2].format(start_ts, end_ts)
-            current_command[6] = current_command[6].format(
-                timestamps_esdump_num_logs_fetched[idx]
-            )
-            current_command[10] = current_command[10].format(
-                os.path.join(self.ES_DUMP_DIR, f"{filename}")
-            )
-            query_queue.append(current_command)
-        """
-        If at least one time interval within timestamps_list has a non zero amount of logs, call the es_dump command
-        and return True to indicate that there is new training data. Otherwise return False
-        """
-        if len(query_queue) > 0:
-            self.run_esdump(query_queue)
-            return True
-        else:
-            return False
+    """
 
     def fetch_files_with_prefix(self, all_files, prefix):
         # Return the files within all_files which begin with prefix term.
@@ -436,6 +386,7 @@ class PrepareTrainingLogs:
         # Delete the ES_DUMP_DIR as well.
         shutil.rmtree(self.ES_DUMP_DIR)
 
+    """
     def run(self):
         if not os.path.exists(self.ES_DUMP_DIR):
             os.makedirs(self.ES_DUMP_DIR)
@@ -459,6 +410,7 @@ class PrepareTrainingLogs:
         if data_exists:
             self.normalize_json_data()
         return data_exists
+    """
 
     def get_num_logs_for_training(self):
         if not os.path.exists(self.ES_DUMP_DIR):
