@@ -200,8 +200,7 @@ async def endpoint_backends():
         reply_subject = msg.reply
         training_payload = msg.data.decode()
         await nw.publish(reply_subject, b"training job submitted")
-        reply_message = await train_model(training_payload)
-        logging.info(reply_message.decode())
+        await train_model(training_payload)
 
     await nw.subscribe("model_status", subscribe_handler=model_status_sub_handler)
     await nw.subscribe(
