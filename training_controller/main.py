@@ -7,8 +7,10 @@ import time
 
 # Third Party
 import boto3
+import requests
 from botocore.client import Config
 from elasticsearch import AsyncElasticsearch
+from nats.aio.errors import ErrTimeout
 from opni_nats import NatsWrapper
 from prepare_training_logs import PrepareTrainingLogs
 
@@ -44,6 +46,30 @@ last_trainingjob_time = 0
 workload_parameters_dict = dict()
 
 
+def get_gpu_status():
+    try:
+        results = requests.get("http://opni-internal:11080/ModelTraining/gpu_info")
+        decoded_result = json.loads(results.content.decode())
+        if "list" in decoded_result:
+            gpu_resources_list = decoded_result["list"]
+            for gpu_info in gpu_resources_list:
+                if int(gpu_info["allocatable"]) > 0:
+                    return "available"
+        return "unavailable"
+
+    except Exception as e:
+        logging.error(e)
+        return "unavailable"
+
+
+async def get_gpu_service_status():
+    try:
+        response = await nw.request("gpu_service_running", b"check-up", timeout=1)
+        return response.data.decode()
+    except ErrTimeout:
+        return "unavailable"
+
+
 async def train_model(workload_parameters: str):
     if gpu_training_request == 0:
         global workload_parameters_dict
@@ -54,7 +80,6 @@ async def train_model(workload_parameters: str):
             body={"time": current_ts, "parameters": workload_parameters},
         )
         max_logs_for_training = PrepareTrainingLogs().get_num_logs_for_training()
-        logging.info(max_logs_for_training)
         end_ts = int(time.time() * 1000)
         start_ts = end_ts - 3600000
         model_logs_query_body = {
@@ -158,22 +183,19 @@ async def consume_request():
         ):  ## "JobStart" is published from function schedule_training_job()
             gpu_training_request += 1
             last_trainingjob_time = time.time()
-        elif message == "JobEnd":  ## "JobEnd" is published from nulog-train contrainer
+        elif message == "JobEnd":
             gpu_training_request -= 1
-        elif message == "JobReset":
-            logging.info("Reset training job status.")
-            gpu_training_request = 0
 
     async def receive_and_reply(msg):
         global last_trainingjob_time
         reply_subject = msg.reply
-        if gpu_training_request > 0:
-            if (
-                last_trainingjob_time > 0
-                and time.time() - last_trainingjob_time > GPU_TRAINING_RESET_TIME
-            ):
-                await nw.publish("gpu_trainingjob_status", b"JobReset")
-                last_trainingjob_time = 0
+        gpu_status = get_gpu_status()
+        gpu_service_status = await get_gpu_service_status()
+        if (
+            gpu_training_request > 0
+            or gpu_status == "unavailable"
+            or gpu_service_status == "unavailable"
+        ):
             reply_message = b"NO"
         else:  ## gpu service available for inference
             await nw.publish("gpu_service_inference_internal", msg.data)
@@ -201,7 +223,6 @@ async def endpoint_backends():
         training_payload = msg.data.decode()
         await nw.publish(reply_subject, b"training job submitted")
         reply_message = await train_model(training_payload)
-        logging.info(reply_message.decode())
 
     await nw.subscribe("model_status", subscribe_handler=model_status_sub_handler)
     await nw.subscribe(
