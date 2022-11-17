@@ -15,8 +15,8 @@ from opni_nats import NatsWrapper
 from prepare_training_logs import PrepareTrainingLogs
 
 ES_ENDPOINT = os.environ["ES_ENDPOINT"]
-ES_USERNAME = os.getenv("ES_USERNAME", "admin")
-ES_PASSWORD = os.getenv("ES_PASSWORD", "admin")
+ES_USERNAME = os.environ["ES_USERNAME"]
+ES_PASSWORD = os.environ["ES_PASSWORD"]
 # s3 config values
 S3_ACCESS_KEY = os.environ["S3_ACCESS_KEY"]
 S3_SECRET_KEY = os.environ["S3_SECRET_KEY"]
@@ -70,15 +70,55 @@ async def get_gpu_service_status():
         return "unavailable"
 
 
-async def train_model(workload_parameters: str):
-    if gpu_training_request == 0:
-        global workload_parameters_dict
-        workload_parameters_dict = json.loads(workload_parameters)
-        current_ts = int(time.time() * 1000)
-        await es_instance.index(
-            index="model-training-parameters",
-            body={"time": current_ts, "parameters": workload_parameters},
+def check_training_necessary(updated_workload_parameters: dict):
+    global workload_parameters_dict
+    for cluster_id in updated_workload_parameters:
+        if not cluster_id in workload_parameters_dict:
+            return True, updated_workload_parameters
+        for namespace_name in updated_workload_parameters[cluster_id]:
+            if not namespace_name in workload_parameters_dict[cluster_id]:
+                return True, updated_workload_parameters
+            for deployment_name in updated_workload_parameters[cluster_id][
+                namespace_name
+            ]:
+                if (
+                    not deployment_name
+                    in workload_parameters_dict[cluster_id][namespace_name]
+                ):
+                    return True, updated_workload_parameters
+    return False, updated_workload_parameters
+
+
+async def schedule_model_training(workload_parameters: str):
+    global workload_parameters_dict
+    updated_workload_parameters = json.loads(workload_parameters)
+    current_ts = int(time.time() * 1000)
+    await es_instance.index(
+        index="model-training-parameters",
+        body={"time": current_ts, "parameters": workload_parameters},
+    )
+    model_training_necessary, workload_parameters_dict = check_training_necessary(
+        updated_workload_parameters
+    )
+    workload_parameter_payload = {"workloads": workload_parameters_dict}
+
+    if model_training_necessary:
+        await train_model()
+        workload_parameter_payload["status_type"] = "train"
+        await nw.publish(
+            "model_workload_parameters", json.dumps(workload_parameter_payload).encode()
         )
+
+    else:
+        workload_parameter_payload["status_type"] = "update"
+        await nw.publish(
+            "model_workload_parameters", json.dumps(workload_parameter_payload).encode()
+        )
+        logging.info("Workload parameters have been updated for inferencing.")
+
+
+async def train_model():
+    if gpu_training_request == 0:
         max_logs_for_training = PrepareTrainingLogs().get_num_logs_for_training()
         end_ts = int(time.time() * 1000)
         start_ts = end_ts - 3600000
@@ -116,7 +156,6 @@ async def train_model(workload_parameters: str):
             "query": model_logs_query_body,
         }
         try:
-            await nw.publish("workload_parameters", workload_parameters.encode())
             await nw.publish("train", json.dumps(payload_query).encode())
             return b"submitted request to train model"
         except Exception as e:
@@ -218,17 +257,28 @@ async def endpoint_backends():
         reply_message = json.dumps(workload_parameters_dict).encode()
         await nw.publish(reply_subject, reply_message)
 
-    async def train_model_sub_handler(msg):
+    async def train_reset_model_sub_handler(msg):
         reply_subject = msg.reply
         training_payload = msg.data.decode()
-        await nw.publish(reply_subject, b"training job submitted")
-        reply_message = await train_model(training_payload)
+        if training_payload == "{}":
+            global workload_parameters_dict
+            workload_parameters_dict = json.loads(training_payload)
+            await nw.publish(reply_subject, b"model reset")
+            model_reset_payload = {"status": "reset"}
+            await nw.publish("model_update", json.dumps(model_reset_payload).encode())
+            reset_payload = {"workloads": {}, "status_type": "reset"}
+            await nw.publish(
+                "model_workload_parameters", json.dumps(reset_payload).encode()
+            )
+        else:
+            await nw.publish(reply_subject, b"training job submitted")
+            await schedule_model_training(training_payload)
 
     await nw.subscribe("model_status", subscribe_handler=model_status_sub_handler)
     await nw.subscribe(
         "workload_parameters", subscribe_handler=workload_parameters_sub_handler
     )
-    await nw.subscribe("train_model", subscribe_handler=train_model_sub_handler)
+    await nw.subscribe("train_model", subscribe_handler=train_reset_model_sub_handler)
 
 
 async def schedule_training_job(payload):
@@ -254,7 +304,6 @@ async def main():
             }
             await schedule_training_job(training_job_payload)
             logging.info("Just received signal to begin running the jobs")
-            logging.info(decoded_payload)
         except Exception as e:
             logging.error(e)
 
