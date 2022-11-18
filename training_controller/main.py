@@ -1,5 +1,6 @@
 # Standard Library
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -71,14 +72,25 @@ async def get_gpu_service_status():
         return "unavailable"
 
 
+async def update_opensearch(parameters):
+    current_ts = int(time.time() * 1000)
+    try:
+        await es_instance.index(
+            index="model-training-parameters",
+            body={"time": current_ts, "parameters": parameters},
+        )
+    except Exception as e:
+        logging.error(e)
+
+
 def check_training_necessary(updated_workload_parameters: dict):
     global workload_parameters_dict
     for cluster_id in updated_workload_parameters:
         if not cluster_id in workload_parameters_dict:
-            return True, updated_workload_parameters
+            return True
         for namespace_name in updated_workload_parameters[cluster_id]:
             if not namespace_name in workload_parameters_dict[cluster_id]:
-                return True, updated_workload_parameters
+                return True
             for deployment_name in updated_workload_parameters[cluster_id][
                 namespace_name
             ]:
@@ -86,21 +98,16 @@ def check_training_necessary(updated_workload_parameters: dict):
                     not deployment_name
                     in workload_parameters_dict[cluster_id][namespace_name]
                 ):
-                    return True, updated_workload_parameters
-    return False, updated_workload_parameters
+                    return True
+    return False
 
 
 async def schedule_model_training(workload_parameters: str):
     global workload_parameters_dict
     updated_workload_parameters = json.loads(workload_parameters)
-    current_ts = int(time.time() * 1000)
-    await es_instance.index(
-        index="model-training-parameters",
-        body={"time": current_ts, "parameters": workload_parameters},
-    )
-    model_training_necessary, workload_parameters_dict = check_training_necessary(
-        updated_workload_parameters
-    )
+    update_opensearch(workload_parameters)
+    model_training_necessary = check_training_necessary(updated_workload_parameters)
+    workload_parameters_dict = copy.deepcopy(updated_workload_parameters)
     workload_parameter_payload = {"workloads": workload_parameters_dict}
 
     if model_training_necessary:
@@ -231,7 +238,6 @@ async def consume_request():
         reply_subject = msg.reply
         gpu_status = get_gpu_status()
         gpu_service_status = await get_gpu_service_status()
-        logging.info(gpu_service_status)
         if (
             gpu_training_request > 0
             or gpu_status == "unavailable"
@@ -265,6 +271,7 @@ async def endpoint_backends():
         if training_payload == "{}":
             global workload_parameters_dict
             workload_parameters_dict = json.loads(training_payload)
+            await update_opensearch(training_payload)
             await nw.publish(reply_subject, b"model reset")
             model_reset_payload = {"status": "reset"}
             await nw.publish("model_update", json.dumps(model_reset_payload).encode())
