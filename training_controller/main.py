@@ -44,11 +44,12 @@ GPU_TRAINING_RESET_TIME = 3600
 gpu_training_request = 0
 last_trainingjob_time = 0
 workload_parameters_dict = dict()
+GPU_GATEWAY_ENDPOINT = "http://opni-internal:11080/ModelTraining/gpu_info"
 
 
 def get_gpu_status():
     try:
-        results = requests.get("http://opni-internal:11080/ModelTraining/gpu_info")
+        results = requests.get(GPU_GATEWAY_ENDPOINT)
         decoded_result = json.loads(results.content.decode())
         if "list" in decoded_result:
             gpu_resources_list = decoded_result["list"]
@@ -230,6 +231,7 @@ async def consume_request():
         reply_subject = msg.reply
         gpu_status = get_gpu_status()
         gpu_service_status = await get_gpu_service_status()
+        logging.info(gpu_service_status)
         if (
             gpu_training_request > 0
             or gpu_status == "unavailable"
