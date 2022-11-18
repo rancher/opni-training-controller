@@ -51,8 +51,8 @@ def get_gpu_status():
     try:
         results = requests.get(GPU_GATEWAY_ENDPOINT)
         decoded_result = json.loads(results.content.decode())
-        if "list" in decoded_result:
-            gpu_resources_list = decoded_result["list"]
+        if "items" in decoded_result:
+            gpu_resources_list = decoded_result["items"]
             for gpu_info in gpu_resources_list:
                 if int(gpu_info["allocatable"]) > 0:
                     return "available"
