@@ -105,7 +105,7 @@ def check_training_necessary(updated_workload_parameters: dict):
 async def schedule_model_training(workload_parameters: str):
     global workload_parameters_dict
     updated_workload_parameters = json.loads(workload_parameters)
-    update_opensearch(workload_parameters)
+    await update_opensearch(workload_parameters)
     model_training_necessary = check_training_necessary(updated_workload_parameters)
     workload_parameters_dict = copy.deepcopy(updated_workload_parameters)
     workload_parameter_payload = {"workloads": workload_parameters_dict}
