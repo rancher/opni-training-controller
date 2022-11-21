@@ -136,6 +136,7 @@ async def train_model():
                     "filter": [{"range": {"time": {"gte": start_ts, "lte": end_ts}}}],
                     "minimum_should_match": 1,
                     "should": [],
+                    "must_not": [{"match": {"anomaly_level.keyword": "Anomaly"}}],
                 }
             }
         }
