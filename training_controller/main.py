@@ -111,11 +111,18 @@ async def schedule_model_training(workload_parameters: str):
     workload_parameter_payload = {"workloads": workload_parameters_dict}
 
     if model_training_necessary:
-        await train_model()
-        workload_parameter_payload["status_type"] = "train"
-        await nw.publish(
-            "model_workload_parameters", json.dumps(workload_parameter_payload).encode()
-        )
+        gpu_service_status = await get_gpu_service_status()
+        if gpu_service_status == "available":
+            await train_model()
+            workload_parameter_payload["status_type"] = "train"
+            await nw.publish(
+                "model_workload_parameters",
+                json.dumps(workload_parameter_payload).encode(),
+            )
+        else:
+            logging.info(
+                "GPU service is not currently available so model cannot be trained."
+            )
 
     else:
         workload_parameter_payload["status_type"] = "update"
