@@ -6,7 +6,6 @@ import subprocess
 
 # Third Party
 import pandas as pd
-from elasticsearch import Elasticsearch
 from elasticsearch.helpers import scan
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(message)s")
@@ -31,9 +30,9 @@ class PrepareTrainingLogs:
         # Fetch size of disk
         logging.info("Fetching size of the disk")
         total, used, free = shutil.disk_usage("/")
-        logging.info("Disk Total: %d GiB" % (total // (2 ** 30)))
-        logging.info("Disk Used: %d GiB" % (used // (2 ** 30)))
-        logging.info("Disk Free: %d GiB" % (free // (2 ** 30)))
+        logging.info("Disk Total: %d GiB" % (total // (2**30)))
+        logging.info("Disk Used: %d GiB" % (used // (2**30)))
+        logging.info("Disk Free: %d GiB" % (free // (2**30)))
         return free
 
     def run_esdump(self, query_commands):
@@ -65,7 +64,7 @@ class PrepareTrainingLogs:
 
         logging.info("Retrieve sample logs from ES")
         es_dump_cmd = (
-            'elasticdump --searchBody \'{"query": { "match_all": {} }, "_source": ["masked_log", "timestamp"], "sort": [{"timestamp": {"order": "desc"}}]}\' --retryAttempts 10 --size=10000 --limit 10000 --input=%s/logs --output=%s --type=data'
+            'NODE_TLS_REJECT_UNAUTHORIZED=0 elasticdump --searchBody \'{"query": { "match_all": {} }, "_source": ["log", "time"], "sort": [{"time": {"order": "desc"}}]}\' --retryAttempts 10 --size=10000 --limit 10000 --input=%s/logs --output=%s --type=data'
             % (FORMATTED_ES_ENDPOINT, self.ES_DUMP_SAMPLE_LOGS_PATH)
         )
         subprocess.run(es_dump_cmd, shell=True)
@@ -125,6 +124,7 @@ class PrepareTrainingLogs:
 
         return timestamps_esdump_num_logs_fetched
 
+    """
     def fetch_training_logs_from_elasticsearch(
         self, es_instance, num_logs_to_fetch, timestamps_list
     ):
@@ -166,15 +166,13 @@ class PrepareTrainingLogs:
                 os.path.join(self.ES_DUMP_DIR, f"{filename}")
             )
             query_queue.append(current_command)
-        """
-        If at least one time interval within timestamps_list has a non zero amount of logs, call the es_dump command
-        and return True to indicate that there is new training data. Otherwise return False
-        """
+        # If at least one time interval within timestamps_list has a non zero amount of logs, call the es_dump command and return True
         if len(query_queue) > 0:
             self.run_esdump(query_queue)
             return True
         else:
             return False
+    """
 
     def fetch_files_with_prefix(self, all_files, prefix):
         # Return the files within all_files which begin with prefix term.
@@ -388,6 +386,7 @@ class PrepareTrainingLogs:
         # Delete the ES_DUMP_DIR as well.
         shutil.rmtree(self.ES_DUMP_DIR)
 
+    """
     def run(self):
         if not os.path.exists(self.ES_DUMP_DIR):
             os.makedirs(self.ES_DUMP_DIR)
@@ -411,3 +410,15 @@ class PrepareTrainingLogs:
         if data_exists:
             self.normalize_json_data()
         return data_exists
+    """
+
+    def get_num_logs_for_training(self):
+        if not os.path.exists(self.ES_DUMP_DIR):
+            os.makedirs(self.ES_DUMP_DIR)
+
+        if not os.path.exists(self.TRAINING_DIR):
+            os.makedirs(self.TRAINING_DIR)
+        free = self.fetch_disk_size()
+        self.retrieve_sample_logs_from_elasticsearch()
+        num_logs_to_fetch = self.calculate_training_logs_size(free)
+        return num_logs_to_fetch
