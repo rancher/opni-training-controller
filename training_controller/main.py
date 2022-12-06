@@ -66,9 +66,10 @@ def get_gpu_status():
 
 async def get_gpu_service_status():
     try:
-        response = await nw.request("gpu_service_running", b"check-up", timeout=1)
+        response = await nw.request("gpu_service_running", b"check-up", timeout=5)
         return response.data.decode()
-    except ErrTimeout:
+    except ErrTimeout as e:
+        logging.error(e)
         return "unavailable"
 
 
@@ -111,11 +112,18 @@ async def schedule_model_training(workload_parameters: str):
     workload_parameter_payload = {"workloads": workload_parameters_dict}
 
     if model_training_necessary:
-        await train_model()
-        workload_parameter_payload["status_type"] = "train"
-        await nw.publish(
-            "model_workload_parameters", json.dumps(workload_parameter_payload).encode()
-        )
+        gpu_service_status = await get_gpu_service_status()
+        if gpu_service_status == "running":
+            await train_model()
+            workload_parameter_payload["status_type"] = "train"
+            await nw.publish(
+                "model_workload_parameters",
+                json.dumps(workload_parameter_payload).encode(),
+            )
+        else:
+            logging.info(
+                "GPU service is currently unavailable so model cannot be trained."
+            )
 
     else:
         workload_parameter_payload["status_type"] = "update"
