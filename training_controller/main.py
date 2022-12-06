@@ -65,6 +65,11 @@ def get_gpu_status():
 
 
 async def get_gpu_service_status():
+    """
+    get_gpu_service_status will either return running or unavailable.
+    It will return running if the GPU service pod is up and running and sends back a response.
+    Otherwise, if there is a timeout, then it will return unavailable.
+    """
     try:
         response = await nw.request("gpu_service_running", b"check-up", timeout=5)
         return response.data.decode()
