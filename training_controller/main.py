@@ -46,6 +46,20 @@ gpu_training_request = 0
 last_trainingjob_time = 0
 workload_parameters_dict = dict()
 GPU_GATEWAY_ENDPOINT = "http://opni-internal:11080/ModelTraining/gpu_info"
+ANOMALY_KEYWORDS = [
+    "(error)",
+    "(fail)",
+    "(fatal)",
+    "(exception)",
+    "(timeout)",
+    "(unavailable)",
+    "(crash)",
+    "(connection refused)",
+    "(network error)",
+    "(deadlock)",
+    "(out of disk)",
+    "(high load)",
+]
 
 
 def get_gpu_status():
@@ -149,8 +163,16 @@ async def train_model():
                     "filter": [{"range": {"time": {"gte": start_ts, "lte": end_ts}}}],
                     "minimum_should_match": 1,
                     "should": [],
-                    "must_not": [{"match": {"anomaly_level.keyword": "Anomaly"}}],
-                }
+                    "must_not": [
+                        {"match": {"anomaly_level.keyword": "Anomaly"}},
+                        {
+                            "query_string": {
+                                "query": " or ".join(ANOMALY_KEYWORDS),
+                                "default_field": "log",
+                            }
+                        },
+                    ],
+                },
             }
         }
         for cluster_id in workload_parameters_dict:
@@ -173,6 +195,7 @@ async def train_model():
                     )
         # This function handles get requests for fetching pod,namespace and workload breakdown insights.
         logging.info(f"Received request to train model.")
+        logging.info(model_logs_query_body)
         payload_query = {
             "max_size": max_logs_for_training,
             "query": model_logs_query_body,
