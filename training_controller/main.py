@@ -48,18 +48,18 @@ workload_parameters_dict = dict()
 GPU_GATEWAY_ENDPOINT = "http://opni-internal:11080/ModelTraining/gpu_info"
 TRAINING_DATA_INTERVAL = 3600 * 1000 * 1 # unit: ms. With introducing streaming data loader, it's possible to download much more training data.
 ANOMALY_KEYWORDS = [
-    "(error)",
-    "(fail)",
-    "(fatal)",
-    "(exception)",
-    "(timeout)",
-    "(unavailable)",
-    "(crash)",
-    "(connection refused)",
-    "(network error)",
-    "(deadlock)",
-    "(out of disk)",
-    "(high load)",
+    "error",
+    "fail",
+    "fatal",
+    "exception",
+    "timeout",
+    "unavailable",
+    "crash",
+    "connection refused",
+    "network error",
+    "deadlock",
+    "out of disk",
+    "high load",
 ]
 
 
@@ -168,7 +168,7 @@ async def train_model():
                         {"match": {"anomaly_level.keyword": "Anomaly"}},
                         {
                             "query_string": {
-                                "query": " or ".join(ANOMALY_KEYWORDS),
+                                "query": " or ".join(parentheses_keywords),
                                 "default_field": "log",
                             }
                         },
