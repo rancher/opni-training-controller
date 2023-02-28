@@ -158,6 +158,7 @@ async def train_model():
         max_logs_for_training = PrepareTrainingLogs().get_num_logs_for_training()
         end_ts = int(time.time() * 1000)
         start_ts = end_ts - TRAINING_DATA_INTERVAL
+        parentheses_keywords = [f"({ANOMALY_KEYWORDS})"]
         model_logs_query_body = {
             "query": {
                 "bool": {
@@ -196,7 +197,9 @@ async def train_model():
                     )
         # This function handles get requests for fetching pod,namespace and workload breakdown insights.
         logging.info(f"Received request to train model.")
-        training_data_count = (await es_instance.count(index="logs", body=model_logs_query_body))["count"]
+        training_data_count = (
+            await es_instance.count(index="logs", body=model_logs_query_body)
+        )["count"]
         payload_query = {
             "max_size": max_logs_for_training,
             "query": model_logs_query_body,
