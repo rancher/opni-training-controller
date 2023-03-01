@@ -158,7 +158,7 @@ async def train_model():
         max_logs_for_training = PrepareTrainingLogs().get_num_logs_for_training()
         end_ts = int(time.time() * 1000)
         start_ts = end_ts - TRAINING_DATA_INTERVAL
-        parentheses_keywords = [f"({ANOMALY_KEYWORDS})"]
+        parentheses_keywords = [f"({x})" for x in ANOMALY_KEYWORDS]
         model_logs_query_body = {
             "query": {
                 "bool": {
