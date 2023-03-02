@@ -48,18 +48,18 @@ workload_parameters_dict = dict()
 GPU_GATEWAY_ENDPOINT = "http://opni-internal:11080/ModelTraining/gpu_info"
 TRAINING_DATA_INTERVAL = 3600 * 1000 * 1 # unit: ms. With introducing streaming data loader, it's possible to download much more training data.
 ANOMALY_KEYWORDS = [
-    "(error)",
-    "(fail)",
-    "(fatal)",
-    "(exception)",
-    "(timeout)",
-    "(unavailable)",
-    "(crash)",
-    "(connection refused)",
-    "(network error)",
-    "(deadlock)",
-    "(out of disk)",
-    "(high load)",
+    "error",
+    "fail",
+    "fatal",
+    "exception",
+    "timeout",
+    "unavailable",
+    "crash",
+    "connection refused",
+    "network error",
+    "deadlock",
+    "out of disk",
+    "high load",
 ]
 
 
@@ -158,6 +158,7 @@ async def train_model():
         max_logs_for_training = PrepareTrainingLogs().get_num_logs_for_training()
         end_ts = int(time.time() * 1000)
         start_ts = end_ts - TRAINING_DATA_INTERVAL
+        parentheses_keywords = [f"({x})" for x in ANOMALY_KEYWORDS]
         model_logs_query_body = {
             "query": {
                 "bool": {
@@ -168,7 +169,7 @@ async def train_model():
                         {"match": {"anomaly_level.keyword": "Anomaly"}},
                         {
                             "query_string": {
-                                "query": " or ".join(ANOMALY_KEYWORDS),
+                                "query": " or ".join(parentheses_keywords),
                                 "default_field": "log",
                             }
                         },
@@ -196,7 +197,9 @@ async def train_model():
                     )
         # This function handles get requests for fetching pod,namespace and workload breakdown insights.
         logging.info(f"Received request to train model.")
-        training_data_count = (await es_instance.count(index="logs", body=model_logs_query_body))["count"]
+        training_data_count = (
+            await es_instance.count(index="logs", body=model_logs_query_body)
+        )["count"]
         payload_query = {
             "max_size": max_logs_for_training,
             "query": model_logs_query_body,
