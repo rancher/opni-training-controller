@@ -46,6 +46,7 @@ gpu_training_request = 0
 last_trainingjob_time = 0
 workload_parameters_dict = dict()
 GPU_GATEWAY_ENDPOINT = "http://opni-internal:11080/ModelTraining/gpu_info"
+TRAINING_DATA_INTERVAL = 3600 * 1000 * 1 # unit: ms. With introducing streaming data loader, it's possible to download much more training data.
 ANOMALY_KEYWORDS = [
     "(error)",
     "(fail)",
@@ -156,7 +157,7 @@ async def train_model():
     if gpu_training_request == 0:
         max_logs_for_training = PrepareTrainingLogs().get_num_logs_for_training()
         end_ts = int(time.time() * 1000)
-        start_ts = end_ts - 3600000
+        start_ts = end_ts - TRAINING_DATA_INTERVAL
         model_logs_query_body = {
             "query": {
                 "bool": {
@@ -195,13 +196,15 @@ async def train_model():
                     )
         # This function handles get requests for fetching pod,namespace and workload breakdown insights.
         logging.info(f"Received request to train model.")
-        logging.info(model_logs_query_body)
+        training_data_count = (await es_instance.count(index="logs", body=model_logs_query_body))["count"]
         payload_query = {
             "max_size": max_logs_for_training,
             "query": model_logs_query_body,
+            "count": training_data_count,
         }
         try:
             await nw.publish("train", json.dumps(payload_query).encode())
+            logging.info(f"payload : {payload_query}")
             return b"submitted request to train model"
         except Exception as e:
             # Bad Request
