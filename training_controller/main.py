@@ -46,7 +46,8 @@ gpu_training_request = 0
 last_trainingjob_time = 0
 workload_parameters_dict = dict()
 GPU_GATEWAY_ENDPOINT = "http://opni-internal:11080/ModelTraining/gpu_info"
-TRAINING_DATA_INTERVAL = 3600 * 1000 * 1 # unit: ms. With introducing streaming data loader, it's possible to download much more training data.
+# unit: ms. With introducing streaming data loader, it's possible to download much more training data.
+TRAINING_DATA_INTERVAL = 3600 * 1000 * 1
 ANOMALY_KEYWORDS = [
     "error",
     "fail",
@@ -186,7 +187,7 @@ async def train_model():
                         "query_string": {
                             "fields": [
                                 "cluster_id",
-                                "kubernetes.namespace_name.keyword",
+                                "namespace_name.keyword",
                                 "deployment.keyword",
                             ],
                             "query": f"{cluster_id} AND {namespace_name} AND {deployment_name}",
