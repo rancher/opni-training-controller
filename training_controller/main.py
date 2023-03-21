@@ -218,10 +218,6 @@ async def train_model():
         return b"currently unable to train model. please try again later."
 
 
-async def get_model_parameters():
-    return workload_parameters_dict
-
-
 def verify_model_saved():
     bucket = s3_client.Bucket("opni-nulog-models")
     model_file = "nulog_model_latest.pt"
@@ -245,14 +241,11 @@ async def get_model_status():
 
 async def get_latest_workload():
     global workload_parameters_dict
-    query_body = {"sort": [{"time": {"order": "desc"}}], "query": {"match_all": {}}}
     try:
-        latest_workload = await es_instance.search(
-            index="model-training-parameters", body=query_body, size=1
-        )
-        workload_parameters_dict = json.loads(
-            latest_workload["hits"]["hits"][0]["_source"]["parameters"]
-        )
+        res = await nw.get_bucket("model-training-parameters")
+        bucket_payload = await res.get("modelTrainingParameters")
+        workload_parameters_dict = json.loads(bucket_payload.decode())
+        logging.info(workload_parameters_dict)
     except Exception as e:
         logging.error(e)
 
@@ -304,11 +297,6 @@ async def endpoint_backends():
         reply_message = await get_model_status()
         await nw.publish(reply_subject, reply_message)
 
-    async def workload_parameters_sub_handler(msg):
-        reply_subject = msg.reply
-        reply_message = json.dumps(workload_parameters_dict).encode()
-        await nw.publish(reply_subject, reply_message)
-
     async def train_reset_model_sub_handler(msg):
         reply_subject = msg.reply
         training_payload = msg.data.decode()
@@ -328,9 +316,6 @@ async def endpoint_backends():
             await schedule_model_training(training_payload)
 
     await nw.subscribe("model_status", subscribe_handler=model_status_sub_handler)
-    await nw.subscribe(
-        "workload_parameters", subscribe_handler=workload_parameters_sub_handler
-    )
     await nw.subscribe("train_model", subscribe_handler=train_reset_model_sub_handler)
 
 
