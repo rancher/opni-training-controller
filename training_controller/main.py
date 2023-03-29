@@ -1,6 +1,5 @@
 # Standard Library
 import asyncio
-import copy
 import json
 import logging
 import os
@@ -45,7 +44,6 @@ nw = NatsWrapper()
 GPU_TRAINING_RESET_TIME = 3600
 gpu_training_request = 0
 last_trainingjob_time = 0
-workload_parameters_dict = dict()
 GPU_GATEWAY_ENDPOINT = "http://opni-internal:11080/ModelTraining/gpu_info"
 # unit: ms. With introducing streaming data loader, it's possible to download much more training data.
 TRAINING_DATA_INTERVAL = 3600 * 1000 * 1
@@ -95,53 +93,73 @@ async def get_gpu_service_status():
         return "unavailable"
 
 
-async def update_opensearch(parameters):
-    current_ts = int(time.time() * 1000)
-    try:
-        await es_instance.index(
-            index="model-training-parameters",
-            body={"time": current_ts, "parameters": json.dumps(parameters)},
-        )
-    except Exception as e:
-        logging.error(e)
+async def get_nats_bucket_kv():
+    result_dict = dict()
+    model_training_bucket = await nw.get_bucket("model-training-parameters")
+    current_bucket_payload = await model_training_bucket.get("modelTrainingParameters")
+    last_trained_bucket_payload = await model_training_bucket.get("lastModelTrained")
+    result_dict["current_workload_parameters"] = json.loads(
+        current_bucket_payload.decode()
+    )
+    if last_trained_bucket_payload:
+        last_trained_payload_dict = json.loads(last_trained_bucket_payload.decode())
+        result_dict["last_trained_workload_parameters"] = last_trained_payload_dict[
+            "payload"
+        ]["parameters"]
+    return result_dict
 
 
-def check_training_necessary(updated_workload_parameters: dict):
-    global workload_parameters_dict
-    for cluster_id in updated_workload_parameters["workloads"]:
-        if not cluster_id in workload_parameters_dict:
+def check_training_necessary(
+    previous_workload_parameters_dict: dict, current_workload_parameters_dict: dict
+):
+    for cluster_id in current_workload_parameters_dict["workloads"]:
+        if not cluster_id in previous_workload_parameters_dict["workloads"]:
             return True
-        for namespace_name in updated_workload_parameters[cluster_id]:
-            if not namespace_name in workload_parameters_dict[cluster_id]:
+        for namespace_name in current_workload_parameters_dict["workloads"][cluster_id]:
+            if (
+                not namespace_name
+                in previous_workload_parameters_dict["workloads"][cluster_id]
+            ):
                 return True
-            for deployment_name in updated_workload_parameters[cluster_id][
-                namespace_name
-            ]:
+            for deployment_name in current_workload_parameters_dict["workloads"][
+                cluster_id
+            ][namespace_name]:
                 if (
                     not deployment_name
-                    in workload_parameters_dict[cluster_id][namespace_name]
+                    in previous_workload_parameters_dict["workloads"][cluster_id][
+                        namespace_name
+                    ]
                 ):
                     return True
     return False
 
 
-async def schedule_model_training(workload_parameters: dict):
-    global workload_parameters_dict
-    updated_workload_parameters = copy.deepcopy(workload_parameters)
-    await update_opensearch(workload_parameters["workloads"])
-    model_training_necessary = check_training_necessary(updated_workload_parameters)
-    workload_parameters_dict = copy.deepcopy(updated_workload_parameters)
-    workload_parameter_payload = {"workloads": workload_parameters_dict["workloads"]}
+async def schedule_model_training():
+    model_training_bucket_dict = await get_nats_bucket_kv()
+    current_workload_parameters_dict = model_training_bucket_dict[
+        "current_workload_parameters"
+    ]
+    model_training_necessary = True
+    if "last_trained_workload_parameters" in model_training_bucket_dict:
+        last_trained_payload_dict = model_training_bucket_dict[
+            "last_trained_workload_parameters"
+        ]
+        model_training_necessary = check_training_necessary(
+            last_trained_payload_dict, current_workload_parameters_dict
+        )
+    workload_parameter_payload = {
+        "workloads": current_workload_parameters_dict["workloads"]
+    }
 
     if model_training_necessary:
         gpu_service_status = await get_gpu_service_status()
         num_retries = 0
         while gpu_service_status != "running" and num_retries < RETRY_LIMIT:
-            asyncio.sleep(30)
+            await asyncio.sleep(30)
             gpu_service_status = await get_gpu_service_status()
             num_retries += 1
         if gpu_service_status == "running":
-            await train_model()
+            await train_model(current_workload_parameters_dict)
             workload_parameter_payload["status_type"] = "train"
             await nw.publish(
                 "model_workload_parameters",
@@ -160,7 +178,7 @@ async def schedule_model_training(workload_parameters: dict):
         logging.info("Workload parameters have been updated for inferencing.")
 
 
-async def train_model():
+async def train_model(workload_parameters_dict):
     if gpu_training_request == 0:
         max_logs_for_training = PrepareTrainingLogs().get_num_logs_for_training()
         end_ts = int(time.time() * 1000)
@@ -210,7 +228,7 @@ async def train_model():
             "max_size": max_logs_for_training,
             "query": model_logs_query_body,
             "count": training_data_count,
-            "uuid": workload_parameters_dict["uuid"],
+            "parameters": workload_parameters_dict,
         }
         try:
             await nw.publish("train", json.dumps(payload_query).encode())
@@ -246,19 +264,21 @@ async def get_model_status():
 
 
 async def get_latest_workload():
-    global workload_parameters_dict
     try:
-        res = await nw.get_bucket("model-training-parameters")
-        current_bucket_payload = await res.get("modelTrainingParameters")
-        workload_parameters_dict = json.loads(current_bucket_payload.decode())
-        last_trained_bucket_payload = await res.get("lastModelTrained")
-        if last_trained_bucket_payload:
-            last_trained_payload = json.loads(last_trained_bucket_payload.decode())
-            if (last_trained_payload is None) or (
-                last_trained_payload["payload"]["uuid"]
-                != workload_parameters_dict["uuid"]
-            ):
-                await schedule_model_training(workload_parameters_dict)
+        model_training_bucket_dict = await get_nats_bucket_kv()
+        workload_parameters_dict = model_training_bucket_dict[
+            "current_workload_parameters"
+        ]
+        if "last_trained_workload_parameters" in model_training_bucket_dict:
+            last_trained_payload = model_training_bucket_dict[
+                "last_trained_workload_parameters"
+            ]
+            logging.info(last_trained_payload)
+            logging.info(workload_parameters_dict)
+            if workload_parameters_dict["uuid"] != last_trained_payload["uuid"]:
+                await schedule_model_training()
+        else:
+            await schedule_model_training()
     except Exception as e:
         logging.error(e)
 
@@ -314,9 +334,6 @@ async def endpoint_backends():
         reply_subject = msg.reply
         training_payload = json.loads(msg.data.decode())
         if len(training_payload["workloads"]) == 0:
-            global workload_parameters_dict
-            workload_parameters_dict = copy.deepcopy(training_payload)
-            await update_opensearch(training_payload["workloads"])
             await nw.publish(reply_subject, b"model reset")
             model_reset_payload = {"status": "reset"}
             await nw.publish("model_update", json.dumps(model_reset_payload).encode())
