@@ -338,6 +338,7 @@ async def endpoint_backends():
     async def train_reset_model_sub_handler(msg):
         reply_subject = msg.reply
         training_payload = json.loads(msg.data.decode())
+        logging.info(training_payload)
         if len(training_payload["workloads"]) == 0:
             await nw.publish(reply_subject, b"model reset")
             model_reset_payload = {"status": "reset"}
@@ -394,7 +395,7 @@ if __name__ == "__main__":
     loop.run_until_complete(task)
     consume_request_coroutine = consume_request()
     plugin_backends_coroutine = endpoint_backends()
-    latest_workload_coroutine = get_latest_workload()
+    latest_workload_coroutine = get_workloads_from_nats()
     main_coroutine = main()
     loop.run_until_complete(
         asyncio.gather(
