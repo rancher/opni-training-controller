@@ -103,9 +103,10 @@ async def get_nats_bucket_kv():
     )
     if last_trained_bucket_payload:
         last_trained_payload_dict = json.loads(last_trained_bucket_payload.decode())
-        result_dict["last_trained_workload_parameters"] = last_trained_payload_dict[
-            "payload"
-        ]["parameters"]
+        if "payload" in last_trained_payload_dict:
+            result_dict["last_trained_workload_parameters"] = last_trained_payload_dict[
+                "payload"
+            ]["parameters"]
     return result_dict
 
 
@@ -144,9 +145,10 @@ async def schedule_model_training():
         last_trained_payload_dict = model_training_bucket_dict[
             "last_trained_workload_parameters"
         ]
-        model_training_necessary = check_training_necessary(
-            last_trained_payload_dict, current_workload_parameters_dict
-        )
+        if "workloads" in last_trained_payload_dict:
+            model_training_necessary = check_training_necessary(
+                last_trained_payload_dict, current_workload_parameters_dict
+            )
     workload_parameter_payload = {
         "workloads": current_workload_parameters_dict["workloads"]
     }
@@ -278,9 +280,9 @@ async def get_workloads_from_nats():
             last_trained_payload = model_training_bucket_dict[
                 "last_trained_workload_parameters"
             ]
-            logging.info(last_trained_payload)
-            logging.info(workload_parameters_dict)
-            if workload_parameters_dict["uuid"] != last_trained_payload["uuid"]:
+            if workload_parameters_dict["uuid"] != last_trained_payload["uuid"] and (
+                "workloads" in workload_parameters_dict
+            ):
                 await schedule_model_training()
         else:
             await schedule_model_training()
@@ -338,8 +340,10 @@ async def endpoint_backends():
     async def train_reset_model_sub_handler(msg):
         reply_subject = msg.reply
         training_payload = json.loads(msg.data.decode())
-        logging.info(training_payload)
-        if len(training_payload["workloads"]) == 0:
+        if "workloads" in training_payload:
+            await nw.publish(reply_subject, b"training job submitted")
+            await schedule_model_training()
+        else:
             await nw.publish(reply_subject, b"model reset")
             model_reset_payload = {"status": "reset"}
             await nw.publish("model_update", json.dumps(model_reset_payload).encode())
@@ -347,9 +351,12 @@ async def endpoint_backends():
             await nw.publish(
                 "model_workload_parameters", json.dumps(reset_payload).encode()
             )
-        else:
-            await nw.publish(reply_subject, b"training job submitted")
-            await schedule_model_training(training_payload)
+            model_training_parameters_bucket = await nw.get_bucket(
+                "model-training-parameters"
+            )
+            operation = await model_training_parameters_bucket.put(
+                "lastModelTrained", json.dumps({}).encode()
+            )
 
     await nw.subscribe("model_status", subscribe_handler=model_status_sub_handler)
     await nw.subscribe("train_model", subscribe_handler=train_reset_model_sub_handler)
