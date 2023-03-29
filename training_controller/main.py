@@ -263,7 +263,12 @@ async def get_model_status():
             return b"not started"
 
 
-async def get_latest_workload():
+async def get_workloads_from_nats():
+    """
+    This function will fetch the current model training parameters as well as the last model training parameters from
+    Nats kv. It will then check to see if the UUIDs are different between the current parameters and the parameters from
+     the last model trained. If they are not the same, it will send it over to the training function.
+    """
     try:
         model_training_bucket_dict = await get_nats_bucket_kv()
         workload_parameters_dict = model_training_bucket_dict[
