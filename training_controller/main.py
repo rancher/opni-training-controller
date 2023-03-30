@@ -10,7 +10,6 @@ import boto3
 import requests
 from botocore.client import Config
 from elasticsearch import AsyncElasticsearch
-from nats.aio.errors import ErrTimeout
 from opni_nats import NatsWrapper
 from prepare_training_logs import PrepareTrainingLogs
 
@@ -22,6 +21,7 @@ S3_ACCESS_KEY = os.environ["S3_ACCESS_KEY"]
 S3_SECRET_KEY = os.environ["S3_SECRET_KEY"]
 S3_ENDPOINT = os.environ["S3_ENDPOINT"]
 S3_BUCKET = os.getenv("S3_BUCKET", "opni-nulog-models")
+MODEL_STATS_ENDPOINT = "http://opni-internal:11080/ModelTraining/model/statistics"
 RETRY_LIMIT = 15
 
 es_instance = AsyncElasticsearch(
@@ -63,6 +63,18 @@ ANOMALY_KEYWORDS = [
 ]
 
 
+def post_model_failure():
+    model_training_stats = {
+        "stage": "trained failed",
+    }
+    try:
+        result = requests.put(
+            MODEL_STATS_ENDPOINT, data=json.dumps(model_training_stats).encode()
+        )
+    except Exception as e:
+        logging.warning(f"Failed to post training status, error: {e}")
+
+
 def get_gpu_status():
     try:
         results = requests.get(GPU_GATEWAY_ENDPOINT)
@@ -88,7 +100,7 @@ async def get_gpu_service_status():
     try:
         response = await nw.request("gpu_service_running", b"check-up", timeout=5)
         return response.data.decode()
-    except ErrTimeout as e:
+    except Exception as e:
         logging.error(e)
         return "unavailable"
 
@@ -171,6 +183,7 @@ async def schedule_model_training():
             logging.info(
                 "GPU service is currently unavailable so model cannot be trained."
             )
+            post_model_failure()
 
     else:
         workload_parameter_payload["status_type"] = "update"
