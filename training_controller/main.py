@@ -21,7 +21,7 @@ S3_ACCESS_KEY = os.environ["S3_ACCESS_KEY"]
 S3_SECRET_KEY = os.environ["S3_SECRET_KEY"]
 S3_ENDPOINT = os.environ["S3_ENDPOINT"]
 S3_BUCKET = os.getenv("S3_BUCKET", "opni-nulog-models")
-MODEL_STATS_ENDPOINT = "http://opni-internal:11080/ModelTraining/model/statistics"
+MODEL_STATS_ENDPOINT = "http://opni-internal:11080/ModelTraining/model/current_status"
 RETRY_LIMIT = 15
 
 es_instance = AsyncElasticsearch(
@@ -63,13 +63,11 @@ ANOMALY_KEYWORDS = [
 ]
 
 
-def post_model_failure():
-    model_training_stats = {
-        "stage": "trained failed",
-    }
+def post_model_status(status):
+    model_training_status = {"status": status}
     try:
         result = requests.put(
-            MODEL_STATS_ENDPOINT, data=json.dumps(model_training_stats).encode()
+            MODEL_STATS_ENDPOINT, data=json.dumps(model_training_status).encode()
         )
     except Exception as e:
         logging.warning(f"Failed to post training status, error: {e}")
@@ -110,6 +108,9 @@ async def get_nats_bucket_kv():
     model_training_bucket = await nw.get_bucket("model-training-parameters")
     current_bucket_payload = await model_training_bucket.get("modelTrainingParameters")
     last_trained_bucket_payload = await model_training_bucket.get("lastModelTrained")
+    test = await nw.get_bucket("model-training-statistics")
+    test_payload = await test.get("modelTrainingStatus")
+    json_result = json.loads(test_payload.decode())
     result_dict["current_workload_parameters"] = json.loads(
         current_bucket_payload.decode()
     )
@@ -183,7 +184,7 @@ async def schedule_model_training():
             logging.info(
                 "GPU service is currently unavailable so model cannot be trained."
             )
-            post_model_failure()
+            post_model_status(status="training failed")
 
     else:
         workload_parameter_payload["status_type"] = "update"
