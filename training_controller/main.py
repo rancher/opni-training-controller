@@ -108,9 +108,6 @@ async def get_nats_bucket_kv():
     model_training_bucket = await nw.get_bucket("model-training-parameters")
     current_bucket_payload = await model_training_bucket.get("modelTrainingParameters")
     last_trained_bucket_payload = await model_training_bucket.get("lastModelTrained")
-    test = await nw.get_bucket("model-training-statistics")
-    test_payload = await test.get("modelTrainingStatus")
-    json_result = json.loads(test_payload.decode())
     result_dict["current_workload_parameters"] = json.loads(
         current_bucket_payload.decode()
     )
