@@ -189,6 +189,7 @@ async def schedule_model_training():
             "model_workload_parameters", json.dumps(workload_parameter_payload).encode()
         )
         logging.info("Workload parameters have been updated for inferencing.")
+        post_model_status(status="completed")
 
 
 async def train_model(workload_parameters_dict):
