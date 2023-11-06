@@ -67,15 +67,20 @@ def post_model_status(status):
     model_training_status = {"status": status}
     try:
         result = requests.put(
-            MODEL_STATS_ENDPOINT, data=json.dumps(model_training_status).encode()
+            MODEL_STATS_ENDPOINT, data=json.dumps(model_training_status).encode(),
+            headers={"Content-Type": "application/json", "Accept" : "application/json"},
         )
+        logging.info(f"Posted training status, result: {result}")
     except Exception as e:
         logging.warning(f"Failed to post training status, error: {e}")
 
 
 def get_gpu_status():
     try:
-        results = requests.get(GPU_GATEWAY_ENDPOINT)
+        results = requests.get(
+            GPU_GATEWAY_ENDPOINT,
+            headers={"Content-Type": "application/json", "Accept" : "application/json"},
+        )
         decoded_result = json.loads(results.content.decode())
         if "items" in decoded_result:
             gpu_resources_list = decoded_result["items"]
